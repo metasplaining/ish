@@ -1,0 +1,11 @@
+[package]
+name = "ish-codegen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ish-ast = { path = "../ish-ast" }
+ish-vm = { path = "../ish-vm" }
+ish-runtime = { path = "../ish-runtime" }
+libloading = "0.8"
+tempfile = "=3.14.0"

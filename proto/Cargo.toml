@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "ish-ast",
+    "ish-vm",
+    "ish-runtime",
+    "ish-codegen",
+    "ish-stdlib",
+    "ish-shell",
+]
+resolver = "2"

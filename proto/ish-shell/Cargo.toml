@@ -1,0 +1,10 @@
+[package]
+name = "ish-shell"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ish-ast = { path = "../ish-ast" }
+ish-vm = { path = "../ish-vm" }
+ish-stdlib = { path = "../ish-stdlib" }
+ish-codegen = { path = "../ish-codegen" }
