@@ -1,3 +1,12 @@
+---
+title: ish Type System
+category: spec
+audience: [all]
+status: draft
+last-verified: 2026-03-10
+depends-on: [docs/spec/agreement.md, docs/spec/polymorphism.md, docs/spec/memory.md]
+---
+
 # ish Type System
 
 ## Goals
@@ -61,7 +70,7 @@ let p = { a: 1 };     // p has type: { a: 1 }
 let ns = [1, 2, 3];   // ns has type: [1, 2, 3]
 ```
 
-Literal types are the most specific types possible. They are what enables the code analyzer to reason precisely about code paths:
+Literal types are the most specific types possible. They enable the code analyzer to reason precisely about code paths:
 
 ```
 let x = 5;
@@ -79,7 +88,7 @@ let y = x + 1;   // y has type: 6 (computed at compile time)
 let z = x * 2;   // z has type: 10
 ```
 
-**String literal types** are supported, enabling patterns like:
+**String literal types** are supported:
 
 ```
 type Direction = "north" | "south" | "east" | "west";
@@ -97,11 +106,7 @@ ish has four built-in special types representing different kinds of "nothing":
 | `undefined` | The value of a property on an open object type when that property does not exist. Has one value: `undefined`. |
 | `never`     | The bottom type — has no values. Represents unreachable code or impossible types.             |
 
-> **Note:** The naming convention for these types (lowercase vs. capitalized) has not been finalized.
-
 ### First-Class Complex Types
-
-Several complex types are so fundamental to how developers work with data that ish treats them as first-class citizens with built-in syntax and semantics.
 
 | Type     | Description                                                                                   |
 |----------|-----------------------------------------------------------------------------------------------|
@@ -141,7 +146,7 @@ The ish type system supports both **structural** and **nominal** typing.
 
 By default, types are **structural**: two object types are compatible if they have the same shape (property names and compatible property types), regardless of how they were declared.
 
-Types can be explicitly declared as **nominal**, in which case compatibility requires that the types be declared as related, not merely that they have the same shape. This is useful for distinguishing types that happen to have the same structure but represent different concepts:
+Types can be explicitly declared as **nominal**, in which case compatibility requires that the types be declared as related, not merely that they have the same shape:
 
 ```
 nominal type UserId = i64;
@@ -160,8 +165,6 @@ An object type can be either **open** or **closed**:
 
 - **Closed** (default): The object has exactly the declared properties. Passing an object with extra properties is an error.
 - **Open**: The object has at least the declared properties but may have additional ones. Accessing an undeclared property returns `undefined`.
-
-> **Note:** The syntax for declaring open vs. closed object types has not been finalized.
 
 Open object types must be implemented as associative arrays at the polymorphism level. The code analyzer can detect when an object is declared open but the open capability is never used, and replace it with a closed type for better performance.
 
@@ -184,8 +187,6 @@ An optional property is typed as `T | null` — when absent, accessing it yields
 
 Individual object properties can be marked as mutable or immutable. Depending on encumbrance configuration, specifying mutability may be required.
 
-> **Note:** The syntax for property mutability has not been finalized.
-
 #### Index Signatures
 
 An object type can declare a catch-all type for arbitrary string keys:
@@ -197,8 +198,6 @@ type StringMap = { [key: String]: i32 };
 #### Methods and `self`
 
 Object types can include function-typed properties (methods). Methods have access to `self`, a reference to the object on which the method was called.
-
-> **Note:** The syntax for methods on object types has not been finalized.
 
 #### Recursive Types
 
@@ -236,8 +235,6 @@ if (condition) {
 ```
 
 **Discriminated unions** (tagged unions) are supported, where each variant has a common property that identifies it. This enables exhaustive pattern matching.
-
-> **Note:** The details of discriminated unions and pattern matching need further specification.
 
 ### Intersection Types
 
@@ -278,7 +275,7 @@ let x = 5;         // inferred type: 5
 let y = x + 1;     // inferred type: 6 (evaluated at compile time)
 ```
 
-In encumbered mode, the code analyzer may require explicit type annotations where inference is ambiguous. Type inference within the same statement is always supported — for example, a literal passed to a function with a typed parameter will infer its type from the parameter.
+In encumbered mode, the code analyzer may require explicit type annotations where inference is ambiguous.
 
 ### Narrowing
 
@@ -300,7 +297,7 @@ Type narrowing applies to any conditional check that provides type information, 
 
 ## Mutability
 
-Mutability is part of the ish type system. Variables are declared as either mutable or immutable:
+Variables are declared as either mutable or immutable:
 
 ```
 let x = 5;         // immutable
@@ -308,8 +305,6 @@ let mut y = 5;     // mutable
 ```
 
 Mutability affects type widening: mutable variables are more likely to have their literal types widened to broader types.
-
-> **Note:** The exact type widening rules have not been finalized.
 
 ---
 
@@ -323,8 +318,6 @@ let mut y = 5;   // widened type (exact rules TBD)
 ```
 
 The exact widening rules interact with the encumbrance configuration. In streamlined mode, widening is aggressive (for convenience). In encumbered mode, widening is conservative (for precision).
-
-> **Note:** The specific widening rules (what triggers widening and what types are widened to) need to be defined.
 
 ---
 
@@ -361,15 +354,11 @@ let scores: Map<String, i32> = { "Alice": 95, "Bob": 87 };
 
 ### Type Parameter Constraints
 
-Generic type parameters can be constrained with bounds:
-
 ```
 type Sortable<T: Comparable> = List<T>;
 ```
 
 ### Type Parameter Defaults
-
-Generic type parameters can have defaults:
 
 ```
 type Result<T, E = Error> = { value: T } | { error: E };
@@ -377,16 +366,12 @@ type Result<T, E = Error> = { value: T } | { error: E };
 
 ### Type Parameter Inference
 
-When calling a generic function, type parameters are inferred from the arguments when possible:
-
 ```
 fn first<T>(list: List<T>) -> T { ... }
 let x = first([1, 2, 3]);   // T is inferred as i32
 ```
 
 ### Higher-Kinded Types
-
-Type parameters can themselves be generic, enabling higher-kinded type abstractions:
 
 ```
 type Functor<F<_>> = {
@@ -398,36 +383,28 @@ type Functor<F<_>> = {
 
 ## Function Types
 
-Functions are first-class values in ish. A function type describes the parameter types and return type:
-
-> **Note:** The exact syntax for function types has not been finalized.
-
-Closures are supported and capture variables by reference.
+Functions are first-class values in ish. Closures are supported and capture variables by reference.
 
 ---
 
 ## The `Type` Metatype
 
-In order to support generics without type erasure, types themselves must be representable as values. ish introduces `Type` as a **metatype** — the type whose instances are types.
+Types themselves are representable as values via the `Type` metatype:
 
 ```
-let t: Type = i32;          // t holds the type i32
-let u: Type = List<String>;  // u holds the parameterized type List<String>
+let t: Type = i32;
+let u: Type = List<String>;
 ```
 
-`Type` is what makes `isType(t, i)` and `validate(t, i)` possible — their first argument is a value of type `Type`. It is also what enables generic types to retain full type information at runtime rather than being erased.
-
-> **Note:** Whether `Type` should be a first-class type (with the same status as `String`, `List`, etc.) or a more restricted internal type has not been decided. At minimum, `Type` values can be passed to functions and stored in variables, but further operations on `Type` values (e.g., constructing new types at runtime, reflecting on type structure) are TBD.
+`Type` is what makes `isType(t, i)` and `validate(t, i)` possible — their first argument is a value of type `Type`. It also enables generic types to retain full type information at runtime rather than being erased.
 
 ---
 
 ## Runtime Type Operations
 
-The type system exposes built-in functions for runtime type checking and validation. These functions accept `Type` values as their first argument.
-
 ### `isType(t, i)`
 
-Returns `true` if and only if instance `i` is of type `t`.
+Returns `true` if instance `i` is of type `t`.
 
 ```
 let x: i32 | String = getValue();
@@ -436,30 +413,18 @@ if (isType(i32, x)) {
 }
 ```
 
-`isType` works with all type constructs, including generic types. For generic types, element types are checked using runtime type metadata:
-
-```
-let data = getData();
-if (isType(List<i32>, data)) {
-    // data is a List, and every element is an i32
-}
-```
-
 ### `validate(t, i)`
 
-Returns `i` cast as type `t` if `i` is of type `t`. Throws an exception otherwise.
+Returns `i` cast as type `t` if valid. Throws an exception otherwise.
 
 ```
 let raw = parseJson(input);
 let person = validate(Person, raw);
-// person is now typed as Person; an exception was thrown if the data didn't match
 ```
 
 ### Custom Type Guards
 
-Developers can define custom type guard functions that provide additional validation beyond structural type checks:
-
-> **Note:** The syntax for custom type guards has not been finalized.
+Developers can define custom type guard functions that provide additional validation beyond structural type checks.
 
 ---
 
@@ -467,13 +432,9 @@ Developers can define custom type guard functions that provide additional valida
 
 ish uses thrown exceptions for error handling. There is a built-in `Error` type.
 
-> **Note:** It is TBD whether `Error` is a first-class type (with the same status as `String`, `List`, etc.) or simply a standard library type. The details of the exception model and how it interacts with the type system need further specification.
-
 ---
 
 ## Interaction with the Encumbrance Continuum
-
-The type system is one of the primary features that varies across the streamlined ↔ encumbered spectrum:
 
 | Aspect                   | Streamlined                                  | Encumbered                                           |
 |--------------------------|----------------------------------------------|------------------------------------------------------|
@@ -490,13 +451,11 @@ The type system is one of the primary features that varies across the streamline
 | Exhaustiveness checking  | Warning (or silent)                          | Build error on non-exhaustive union matches           |
 | Null safety              | Relaxed                                      | Strict — nullable types must be explicitly handled    |
 
-> **Note:** The syntax for per-variable encumbrance configuration is TBD.
-
 ---
 
 ## Rust Mapping
 
-Every ish type has a defined mapping to Rust. This mapping is used by both the virtual machine (which is implemented in Rust) and the Rust code generator (which emits Rust source). The compiler is free to choose between equivalent Rust representations (e.g., `String` vs. `&str`) based on context — this is an implementation detail not exposed in the language interface.
+Every ish type has a defined mapping to Rust:
 
 | ish type          | Rust representation                                          |
 |-------------------|--------------------------------------------------------------|
@@ -513,4 +472,80 @@ Every ish type has a defined mapping to Rust. This mapping is used by both the v
 | `void`            | `()`                                                         |
 | `never`           | `!` (the never type)                                         |
 
-Generic types are not erased at runtime. Each value carries its full `Type` information (see [The `Type` Metatype](#the-type-metatype)). Depending on the polymorphism strategy, generics may be monomorphized (for the monomorphized strategy) or stored as type-tagged values (for virtual method table or associative array strategies).
+Generic types are not erased at runtime. Depending on the polymorphism strategy, generics may be monomorphized or stored as type-tagged values.
+
+---
+
+## Open Questions
+
+Open questions for the type system. See also [docs/project/open-questions.md](../project/open-questions.md#type-system) for a consolidated view.
+
+### Naming Convention
+
+- [ ] **Capitalization of special types.** The spec uses lowercase (`void`, `null`, `undefined`, `never`) but this convention has not been finalized. Should these match the lowercase primitives (`bool`, `i32`) or the capitalized complex types (`String`, `List`)?
+
+### Object Types — Syntax Gaps
+
+- [ ] **Open vs. closed object type syntax.** The concept is defined but there is no syntax for declaring an object type as open or closed.
+- [ ] **Property mutability syntax.** Individual properties can be mutable or immutable, but the annotation syntax has not been defined.
+- [ ] **Method syntax on object types.** Object types can include function-typed properties (methods), but the syntax has not been defined.
+
+### Union Types
+
+- [ ] **Discriminated unions — full specification.** What constitutes a discriminant property? How does pattern matching / exhaustive switching work?
+- [ ] **Union type flattening.** Is `(A | B) | C` the same as `A | B | C`? Are nested unions automatically flattened?
+
+### Type Widening
+
+- [ ] **Widening rules are not specified.** Does `let mut x = 5` widen to `i32`? `f64`? Does `let mut s = "hello"` widen to `String`? Does `let mut b = true` widen to `bool`? What triggers widening?
+
+### Generic Types
+
+- [ ] **Variance.** Are generic types covariant, contravariant, or invariant? Is `List<Dog>` assignable to `List<Animal>`?
+
+### Function Types
+
+- [ ] **Function type syntax.** The syntax for writing function types (e.g., `(i32, String) -> bool`) has not been decided.
+- [ ] **Generic function types.** How do type parameters work in function type signatures?
+- [ ] **Overloaded function types.** Can a function have multiple type signatures?
+
+### Runtime Type Operations
+
+- [ ] **Performance implications of `validate`.** Validating deeply nested object types at runtime could be expensive. Are there guidelines or lazy validation strategies?
+- [ ] **Custom type guard syntax.** Custom type guards are confirmed as supported, but the syntax has not been defined.
+
+### Rust Mapping
+
+- [ ] **Union type representation details.** How are variant names generated? How does this interact with pattern matching on the Rust side?
+- [ ] **Object representation selection.** Rules for choosing between struct, enum, and `HashMap<String, Value>` need cross-referencing with the polymorphism spec.
+- [ ] **`undefined` Rust mapping.** The Rust representation of `undefined` (for open object property access) needs to be specified.
+
+### Error Types
+
+- [ ] **`Error` type status.** Is `Error` a first-class type or a standard library type?
+- [ ] **Exception model details.** How are exceptions typed? Can a function signature declare what exceptions it may throw?
+
+### Encumbrance Configuration
+
+- [ ] **Per-variable encumbrance syntax.** The syntax for configuring encumbrance per-variable has not been designed.
+
+### The `Type` Metatype
+
+- [ ] **First-class vs. restricted.** Should `Type` be a full first-class type or restricted to specific patterns?
+- [ ] **Runtime type construction.** Can new types be constructed at runtime?
+- [ ] **Type reflection.** Can code inspect the structure of a `Type` value at runtime?
+- [ ] **Rust mapping for `Type`.** What is the Rust representation of a `Type` value?
+
+### Type Compatibility and Assignability
+
+- [ ] **Subtype / assignability rules are not formalized.** When is type A assignable to type B?
+- [ ] **Coercion rules.** Are there any implicit coercions beyond configurable numeric conversions?
+
+---
+
+## Referenced by
+
+- [docs/spec/INDEX.md](INDEX.md)
+- [docs/architecture/vm.md](../architecture/vm.md)
+- [docs/user-guide/types.md](../user-guide/types.md)
+- [docs/ai-guide/orientation.md](../ai-guide/orientation.md)

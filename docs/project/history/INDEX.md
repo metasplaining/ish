@@ -1,0 +1,26 @@
+---
+title: Development History
+category: project
+audience: [all]
+status: draft
+last-verified: 2026-03-10
+depends-on: [docs/INDEX.md]
+---
+
+# Development History
+
+Conversations between human and AI developers, showing how the project evolved and what factors were considered.
+
+Files are named `<isodate>-<topic>.md` for chronological sorting.
+
+---
+
+| Date | Topic | File |
+|------|-------|------|
+| 2026-03-10 | Documentation system design | [2026-03-10-documentation-system.md](2026-03-10-documentation-system.md) |
+
+---
+
+## Referenced by
+
+- [docs/INDEX.md](../../INDEX.md)

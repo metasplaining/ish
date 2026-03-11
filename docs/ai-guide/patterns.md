@@ -1,0 +1,85 @@
+---
+title: "AI Guide: Common Patterns"
+category: ai-guide
+audience: [ai-agent]
+status: draft
+last-verified: 2026-03-10
+depends-on: [docs/spec/types.md, docs/spec/modules.md]
+---
+
+# Common Patterns
+
+Patterns that recur in idiomatic ish code. Use these as templates when generating code.
+
+## Builder Pattern (Streamlined)
+
+```
+let config = {}
+config.host = "localhost"
+config.port = 8080
+config.debug = true
+start_server(config)
+```
+
+## Builder Pattern (Encumbered)
+
+```
+type ServerConfig = {
+    host: String
+    port: Int
+    debug: Bool
+}
+
+let config: ServerConfig = {
+    host: "localhost",
+    port: 8080,
+    debug: true
+}
+start_server(config)
+```
+
+## Optional Values
+
+```
+// Streamlined
+let name = get_name() // might be nil
+if name { print(name) }
+
+// Encumbered
+let name: String? = get_name()
+match name {
+    Some(n) -> print(n)
+    None -> print("anonymous")
+}
+```
+
+## Union Types for Error Handling
+
+```
+fn parse(input: String) -> Int | ParseError {
+    // ...
+}
+
+match parse("42") {
+    Int(n) -> use(n)
+    ParseError(e) -> report(e)
+}
+```
+
+## Structural Subtyping
+
+```
+// Any object with a .name field works
+fn greet(thing: { name: String }) {
+    print("Hello, " + thing.name)
+}
+
+greet({ name: "Alice", age: 30 })  // OK — extra fields ignored
+```
+
+---
+
+## Referenced by
+
+- [docs/ai-guide/INDEX.md](INDEX.md)
+- [docs/ai-guide/orientation.md](orientation.md)
