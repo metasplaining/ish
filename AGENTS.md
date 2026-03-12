@@ -82,6 +82,8 @@ Load only the files you need for the task at hand.
 - Every documentation file requires YAML frontmatter and a `## Referenced by` section.
 - After code changes, update affected docs and add a history entry.
 - Track documentation debt in [docs/project/documentation-debt.md](docs/project/documentation-debt.md).
+- When creating documentation with minimal specification, set `status: placeholder`.
+- History files are written for humans. Use narrative prose that tells the story of what happened, including the evolution of ideas through proposal/response/decision exchanges. Do not write terse summaries or bullet-point logs.
 
 ---
 

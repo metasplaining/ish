@@ -2,7 +2,7 @@
 title: Language Basics
 category: user-guide
 audience: [human-dev]
-status: draft
+status: placeholder
 last-verified: 2026-03-10
 depends-on: [docs/spec/syntax.md, docs/spec/types.md]
 ---

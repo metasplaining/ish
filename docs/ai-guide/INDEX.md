@@ -2,7 +2,7 @@
 title: AI Guide Index
 category: ai-guide
 audience: [ai-dev]
-status: draft
+status: placeholder
 last-verified: 2026-03-10
 depends-on: [docs/INDEX.md]
 ---

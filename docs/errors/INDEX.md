@@ -2,7 +2,7 @@
 title: Error Catalog
 category: project
 audience: [all]
-status: draft
+status: placeholder
 last-verified: 2026-03-10
 depends-on: [docs/INDEX.md]
 ---

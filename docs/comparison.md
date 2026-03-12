@@ -2,7 +2,7 @@
 title: "Language Comparison"
 category: project
 audience: [human-dev]
-status: draft
+status: placeholder
 last-verified: 2026-03-10
 depends-on: [docs/spec/agreement.md, docs/spec/types.md]
 ---

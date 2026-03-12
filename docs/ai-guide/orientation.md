@@ -2,7 +2,7 @@
 title: "AI Guide: Orientation"
 category: ai-guide
 audience: [ai-agent]
-status: draft
+status: placeholder
 last-verified: 2026-03-10
 depends-on: [GLOSSARY.md, docs/spec/INDEX.md, docs/architecture/INDEX.md]
 ---

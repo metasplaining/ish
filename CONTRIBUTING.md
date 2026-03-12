@@ -46,7 +46,7 @@ All documentation files use Markdown with YAML frontmatter:
 title: <Document Title>
 category: user-guide | ai-guide | spec | architecture | project
 audience: [all | human-dev | ai-dev | contributor]
-status: draft | review | stable
+status: placeholder | draft | review | stable
 last-verified: YYYY-MM-DD
 depends-on: [list of files this doc references for its claims]
 ---
@@ -84,6 +84,7 @@ depends-on: [list of files this doc references for its claims]
 
 | Status | Meaning |
 |--------|---------|
+| `placeholder` | Generated without sufficient specification. Non-normative — content may be entirely hallucinated. Must be reviewed and rewritten before promotion to `draft`. |
 | `draft` | Incomplete or unreviewed. May contain placeholders or known inaccuracies. |
 | `review` | Believed complete but not verified against the current implementation. |
 | `stable` | Verified against the current implementation and believed accurate. |
@@ -103,7 +104,7 @@ After every incremental change to the system:
 3. **Update status.** If a `stable` document was modified, its status reverts to `review`.
 4. **Update `last-verified` date** once confirmed accurate.
 5. **Update the maturity document** ([docs/project/maturity.md](docs/project/maturity.md)) if the change affects what is implemented.
-6. **Add a history file** under `docs/project/history/` named `<isodate>-<topic>.md` and update the [history index](docs/project/history/INDEX.md).
+6. **Add a history file** under `docs/project/history/` named `<isodate>-<topic>.md` and update the [history index](docs/project/history/INDEX.md). History files are written for a human audience — use narrative prose that tells the story of what changed and why, showing the proposal → feedback → decision flow where applicable. Do not write terse agent-style summaries.
 7. **Track documentation debt** in [docs/project/documentation-debt.md](docs/project/documentation-debt.md) if docs cannot be updated immediately.
 
 ---

@@ -3,7 +3,7 @@ title: Development History
 category: project
 audience: [all]
 status: draft
-last-verified: 2026-03-10
+last-verified: 2026-03-11
 depends-on: [docs/INDEX.md]
 ---
 
@@ -18,6 +18,7 @@ Files are named `<isodate>-<topic>.md` for chronological sorting.
 | Date | Topic | File |
 |------|-------|------|
 | 2026-03-10 | Documentation system design | [2026-03-10-documentation-system.md](2026-03-10-documentation-system.md) |
+| 2026-03-11 | Documentation conventions cleanup | [2026-03-11-documentation-conventions-cleanup.md](2026-03-11-documentation-conventions-cleanup.md) |
 
 ---
 

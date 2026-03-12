@@ -2,7 +2,7 @@
 title: "Project Roadmap"
 category: project
 audience: [human-dev, ai-agent]
-status: draft
+status: placeholder
 last-verified: 2026-03-10
 depends-on: []
 ---

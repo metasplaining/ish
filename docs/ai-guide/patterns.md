@@ -2,7 +2,7 @@
 title: "AI Guide: Common Patterns"
 category: ai-guide
 audience: [ai-agent]
-status: draft
+status: placeholder
 last-verified: 2026-03-10
 depends-on: [docs/spec/types.md, docs/spec/modules.md]
 ---
