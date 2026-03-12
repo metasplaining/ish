@@ -98,6 +98,37 @@ impl<'a> fmt::Display for StmtDisplay<'a> {
                 write!(f, ") ")?;
                 write!(f, "{}", StmtDisplay(body, d))
             }
+            Statement::Throw { value } => {
+                indent(f, d)?;
+                write!(f, "throw {};", ExprDisplay(value))
+            }
+            Statement::TryCatch { body, catches, finally } => {
+                indent(f, d)?;
+                write!(f, "try {}", StmtDisplay(body, d))?;
+                for clause in catches {
+                    write!(f, " catch ({}) {}", clause.param, StmtDisplay(&clause.body, d))?;
+                }
+                if let Some(fin) = finally {
+                    write!(f, " finally {}", StmtDisplay(fin, d))?;
+                }
+                Ok(())
+            }
+            Statement::WithBlock { resources, body } => {
+                indent(f, d)?;
+                write!(f, "with (")?;
+                for (i, (name, expr)) in resources.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{} = {}", name, ExprDisplay(expr))?;
+                }
+                write!(f, ") ")?;
+                write!(f, "{}", StmtDisplay(body, d))
+            }
+            Statement::Defer { body } => {
+                indent(f, d)?;
+                write!(f, "defer {}", StmtDisplay(body, d))
+            }
         }
     }
 }

@@ -15,8 +15,7 @@ Structured proposals generated from prompt files using the `/propose` skill. Eac
 
 | Date | Topic | File |
 |------|-------|------|
-
-*No proposals yet.*
+| 2026-03-11 | Error Handling | [error-handling.md](error-handling.md) |
 
 ---
 

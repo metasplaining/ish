@@ -3,7 +3,7 @@ title: ish Execution Configurations
 category: spec
 audience: [all]
 status: draft
-last-verified: 2026-03-10
+last-verified: 2026-03-11
 depends-on: [docs/spec/modules.md, docs/spec/agreement.md]
 ---
 
@@ -43,6 +43,12 @@ This is the configuration used to build encumbered ish (see [agreement.md](agree
 ## 4. Executable
 
 When ish generates an executable, it is compiled down to just the modules the program needs. Typically, this means the thin shell modules — shell, parser, virtual machine, and module loader — are excluded. The result is a standalone executable with no ish interpreter overhead.
+
+---
+
+## Error Handling Across Configurations
+
+All execution configurations support ish's error handling mechanisms (throw/try/catch/finally, with blocks, defer). The **return handler** mechanism — which intercepts function returns to manage error propagation and stack trace construction — is an implementation detail hidden from the user. It operates as a separate execution concern. See [docs/user-guide/error-handling.md](../user-guide/error-handling.md) for user-facing documentation.
 
 ---
 

@@ -3,7 +3,7 @@ title: "Architecture: ish-ast"
 category: architecture
 audience: [all]
 status: draft
-last-verified: 2026-03-10
+last-verified: 2026-03-11
 depends-on: [docs/architecture/overview.md]
 ---
 
@@ -45,6 +45,16 @@ pub enum Statement {
     Return { value },
     ExpressionStmt(Expression),
     FunctionDecl { name, params, return_type, body },
+    Throw { value: Expression },
+    TryCatch { body, catches: Vec<CatchClause>, finally },
+    WithBlock { resources: Vec<(String, Expression)>, body },
+    Defer { body },
+}
+
+pub struct CatchClause {
+    pub param: String,
+    pub type_annotation: Option<TypeAnnotation>,
+    pub body: Box<Statement>,
 }
 
 pub enum AssignTarget {
@@ -72,6 +82,12 @@ Expression::binary(op, left, right)
 Expression::call(callee, args)
 Statement::var_decl("x", expr)    // VariableDecl with no type annotation
 Statement::ret(expr)              // Return { value: Some(expr) }
+Statement::throw(expr)            // Throw { value: expr }
+Statement::try_catch(body, catches, finally)
+Statement::with_block(resources, body)
+Statement::defer(body)            // Defer { body }
+CatchClause::new(param, body)     // untyped catch
+CatchClause::typed(param, type_annotation, body)
 ```
 
 ---
@@ -81,7 +97,7 @@ Statement::ret(expr)              // Return { value: Some(expr) }
 Fluent builders for constructing programs without deep nesting:
 
 - **`ProgramBuilder`** — top-level: `.function()`, `.var_decl()`, `.stmt()`, `.expr_stmt()`, `.build()`
-- **`BlockBuilder`** — block-level: `.var_decl()`, `.assign()`, `.ret()`, `.if_then()`, `.if_else()`, `.while_loop()`, `.for_each()`, `.function()`, `.build()`
+- **`BlockBuilder`** — block-level: `.var_decl()`, `.assign()`, `.ret()`, `.if_then()`, `.if_else()`, `.while_loop()`, `.for_each()`, `.function()`, `.throw()`, `.try_catch()`, `.defer()`, `.build()`
 
 The builder closures (`|b| b.ret(...)`) return `&mut BlockBuilder` for chaining.
 
@@ -108,6 +124,18 @@ fn factorial(n) {
 - `lib.rs`: 8 tests (AST construction and serialization)
 - `builder.rs`: 2 tests (builder API)
 - `display.rs`: 1 test (display formatting)
+
+---
+
+## Error Handling Nodes
+
+The following AST nodes support error handling:
+
+- **`Throw { value }`** — Raises the evaluated expression as a thrown error.
+- **`TryCatch { body, catches, finally }`** — Executes the body; if a throw occurs, matches against catch clauses; always executes the finally block.
+- **`CatchClause { param, type_annotation, body }`** — Binds the thrown value to `param` and executes the body. The `type_annotation` enables type-based catch matching (not yet implemented).
+- **`WithBlock { resources, body }`** — Initializes resources, executes the body, then closes resources in reverse order.
+- **`Defer { body }`** — Schedules the body to execute when the enclosing block exits.
 
 ---
 

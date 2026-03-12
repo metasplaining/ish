@@ -3,7 +3,7 @@ title: "Architecture: ish-vm"
 category: architecture
 audience: [all]
 status: draft
-last-verified: 2026-03-10
+last-verified: 2026-03-11
 depends-on: [docs/architecture/overview.md, docs/architecture/ast.md]
 ---
 
@@ -78,11 +78,28 @@ pub struct IshVm {
 | `vm.eval_expression(&Expression, &Environment)` | Evaluate a single expression |
 | `vm.call_function(&Value, &[Value])` | Call a function value with arguments |
 
-**Control flow** uses `ControlFlow::None`, `ControlFlow::Return(Value)`, `ControlFlow::ExprValue(Value)`.
+**Control flow** uses `ControlFlow::None`, `ControlFlow::Return(Value)`, `ControlFlow::ExprValue(Value)`, `ControlFlow::Throw(Value)`.
 
 **Short-circuit evaluation:** `And` and `Or` operators only evaluate the right operand when needed.
 
 **Division by zero** returns a `RuntimeError` rather than panicking.
+
+### Throw and Try/Catch
+
+The `Throw` statement evaluates its expression and returns `ControlFlow::Throw(value)`. This unwinds through blocks, loops, and other statements until it reaches either:
+
+- A `TryCatch` statement, which catches the throw, binds the value to the catch clause's parameter, and executes the catch body.
+- A function boundary, where `call_function` converts `ControlFlow::Throw(v)` into `Err(RuntimeError::thrown(v))`. The `TryCatch` handler also catches these `RuntimeError`s with `thrown_value`, so try/catch works across function calls.
+
+`Finally` blocks always execute. A throw from a finally block replaces any in-flight error.
+
+### With Blocks
+
+`WithBlock` initializes resources in declaration order, executes the body, then calls `close()` on each resource in reverse order. If initialization of a later resource fails, earlier ones are closed. Body errors take precedence over close errors.
+
+### Defer
+
+`Defer` statements within a `Block` are collected during execution and run in LIFO order when the block exits — whether normally, via return, or via throw.
 
 ---
 
@@ -98,6 +115,7 @@ pub struct IshVm {
 | Objects | `obj_get`, `obj_set`, `obj_has`, `obj_keys`, `obj_values`, `obj_remove` |
 | Types | `type_of`, `is_type` |
 | Conversion | `to_string`, `to_int`, `to_float` |
+| Errors | `new_error`, `is_error`, `error_message` |
 
 ---
 
@@ -111,7 +129,7 @@ Bidirectional conversion between Rust AST types and ish Values (Objects with `"k
 
 **AST factory builtins** (22 functions callable from ish programs):
 
-`ast_program`, `ast_literal`, `ast_identifier`, `ast_binary_op`, `ast_unary_op`, `ast_function_call`, `ast_block`, `ast_return`, `ast_var_decl`, `ast_if`, `ast_while`, `ast_function_decl`, `ast_expr_stmt`, `ast_lambda`, `ast_property_access`, `ast_index_access`, `ast_object_literal`, `ast_list_literal`, `ast_param`, `ast_assignment`, `ast_assign_target_var`, `ast_for_each`
+`ast_program`, `ast_literal`, `ast_identifier`, `ast_binary_op`, `ast_unary_op`, `ast_function_call`, `ast_block`, `ast_return`, `ast_var_decl`, `ast_if`, `ast_while`, `ast_function_decl`, `ast_expr_stmt`, `ast_lambda`, `ast_property_access`, `ast_index_access`, `ast_object_literal`, `ast_list_literal`, `ast_param`, `ast_assignment`, `ast_assign_target_var`, `ast_for_each`, `ast_throw`, `ast_try_catch`, `ast_defer`
 
 ### Value representation of AST nodes
 
@@ -129,13 +147,16 @@ Every node is an Object with a `"kind"` field:
 
 ## Error Handling (`error.rs`)
 
-`RuntimeError` type used throughout the VM.
+`RuntimeError` type used throughout the VM. Contains a `message` field and an optional `thrown_value: Option<Value>` that preserves the original value when a throw crosses a function boundary.
+
+- `RuntimeError::new(message)` — create a runtime error with a message
+- `RuntimeError::thrown(value)` — create a runtime error from a thrown value, preserving it for the caller's try/catch
 
 ---
 
 ## Tests
 
-- `interpreter.rs`: 8 tests
+- `interpreter.rs`: 19 tests (execution) + 14 error handling tests
 - `builtins.rs`: 6 tests
 - `reflection.rs`: 4 tests
 

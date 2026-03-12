@@ -19,6 +19,7 @@ Files are named `<isodate>-<topic>.md` for chronological sorting.
 |------|-------|------|
 | 2026-03-10 | Documentation system design | [2026-03-10-documentation-system.md](2026-03-10-documentation-system.md) |
 | 2026-03-11 | Documentation conventions cleanup | [2026-03-11-documentation-conventions-cleanup.md](2026-03-11-documentation-conventions-cleanup.md) |
+| 2026-03-11 | Error handling implementation | [2026-03-11-error-handling.md](2026-03-11-error-handling.md) |
 
 ---
 

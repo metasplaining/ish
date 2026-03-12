@@ -3,7 +3,7 @@ title: ish Type System
 category: spec
 audience: [all]
 status: draft
-last-verified: 2026-03-10
+last-verified: 2026-03-11
 depends-on: [docs/spec/agreement.md, docs/spec/polymorphism.md, docs/spec/memory.md]
 ---
 
@@ -430,7 +430,17 @@ Developers can define custom type guard functions that provide additional valida
 
 ## Error Handling
 
-ish uses thrown exceptions for error handling. There is a built-in `Error` type.
+ish uses thrown exceptions for error handling. There is a built-in `Error` type — an object with a `message` property and error metadata. Errors are created with `new_error(message)`, thrown with `throw`, and caught with `try`/`catch`/`finally`.
+
+Functions that can throw errors may declare their error types using union types:
+
+```
+fn read_file(path: String) -> String | FileError { ... }
+```
+
+In encumbered mode, the compiler infers error union types automatically and can optionally require explicit declarations. In streamlined mode, error types are not tracked.
+
+Three error mode presets are available: streamlined (throw without declaring), encumbered (must declare and handle errors), and no-throw (all errors via result types). See [docs/spec/agreement.md](agreement.md) and [docs/user-guide/error-handling.md](../user-guide/error-handling.md) for details.
 
 ---
 
@@ -522,8 +532,8 @@ Open questions for the type system. See also [docs/project/open-questions.md](..
 
 ### Error Types
 
-- [ ] **`Error` type status.** Is `Error` a first-class type or a standard library type?
-- [ ] **Exception model details.** How are exceptions typed? Can a function signature declare what exceptions it may throw?
+- [x] **`Error` type status.** Error objects are structural — created with `new_error()` which produces an object with `message` and `__is_error__` metadata. Not a nominal type. Open question whether this should become a nominal type.
+- [x] **Exception model details.** ish uses thrown exceptions. Functions can declare thrown error types as union types in encumbered mode. The compiler infers error union types automatically. Three mode presets: streamlined, encumbered, no-throw.
 
 ### Encumbrance Configuration
 

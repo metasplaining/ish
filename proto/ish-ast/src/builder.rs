@@ -180,6 +180,25 @@ impl BlockBuilder {
             statements: self.statements,
         }
     }
+
+    pub fn throw(self, value: Expression) -> Self {
+        self.stmt(Statement::throw(value))
+    }
+
+    pub fn try_catch(
+        self,
+        body_fn: impl FnOnce(BlockBuilder) -> BlockBuilder,
+        catches: Vec<CatchClause>,
+        finally_fn: Option<impl FnOnce(BlockBuilder) -> BlockBuilder>,
+    ) -> Self {
+        let body = body_fn(BlockBuilder::new()).build();
+        let finally = finally_fn.map(|f| f(BlockBuilder::new()).build());
+        self.stmt(Statement::try_catch(body, catches, finally))
+    }
+
+    pub fn defer(self, stmt: Statement) -> Self {
+        self.stmt(Statement::defer(stmt))
+    }
 }
 
 impl Default for BlockBuilder {

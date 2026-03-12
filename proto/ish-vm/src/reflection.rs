@@ -90,6 +90,47 @@ pub fn stmt_to_value(stmt: &Statement) -> Value {
             map.insert("params".to_string(), new_list(param_vals));
             map.insert("body".to_string(), stmt_to_value(body));
         }
+        Statement::Throw { value } => {
+            map.insert("kind".to_string(), str_val("throw"));
+            map.insert("value".to_string(), expr_to_value(value));
+        }
+        Statement::TryCatch { body, catches, finally } => {
+            map.insert("kind".to_string(), str_val("try_catch"));
+            map.insert("body".to_string(), stmt_to_value(body));
+            let catch_vals: Vec<Value> = catches
+                .iter()
+                .map(|c| {
+                    let mut cm = HashMap::new();
+                    cm.insert("param".to_string(), str_val(&c.param));
+                    cm.insert("body".to_string(), stmt_to_value(&c.body));
+                    Value::Object(Gc::new(GcCell::new(cm)))
+                })
+                .collect();
+            map.insert("catches".to_string(), new_list(catch_vals));
+            if let Some(fin) = finally {
+                map.insert("finally".to_string(), stmt_to_value(fin));
+            } else {
+                map.insert("finally".to_string(), Value::Null);
+            }
+        }
+        Statement::WithBlock { resources, body } => {
+            map.insert("kind".to_string(), str_val("with_block"));
+            let res_vals: Vec<Value> = resources
+                .iter()
+                .map(|(name, expr)| {
+                    let mut rm = HashMap::new();
+                    rm.insert("name".to_string(), str_val(name));
+                    rm.insert("value".to_string(), expr_to_value(expr));
+                    Value::Object(Gc::new(GcCell::new(rm)))
+                })
+                .collect();
+            map.insert("resources".to_string(), new_list(res_vals));
+            map.insert("body".to_string(), stmt_to_value(body));
+        }
+        Statement::Defer { body } => {
+            map.insert("kind".to_string(), str_val("defer"));
+            map.insert("body".to_string(), stmt_to_value(body));
+        }
     }
     Value::Object(Gc::new(GcCell::new(map)))
 }
@@ -300,6 +341,61 @@ pub fn value_to_stmt(value: &Value) -> Result<Statement, RuntimeError> {
                 name,
                 params,
                 return_type: None,
+                body: Box::new(body),
+            })
+        }
+        "throw" => {
+            let val_node = get_field(value, "value")?;
+            let expr = value_to_expr(&val_node)?;
+            Ok(Statement::throw(expr))
+        }
+        "try_catch" => {
+            let body = value_to_stmt(&get_field(value, "body")?)?;
+            let catches_val = get_field(value, "catches")?;
+            let catches = if let Value::List(ref list_ref) = catches_val {
+                let list = list_ref.borrow();
+                let mut clauses = Vec::new();
+                for c in list.iter() {
+                    let param = get_string_field(c, "param")?;
+                    let clause_body = value_to_stmt(&get_field(c, "body")?)?;
+                    clauses.push(CatchClause::new(param, clause_body));
+                }
+                clauses
+            } else {
+                Vec::new()
+            };
+            let finally_val = get_field(value, "finally")?;
+            let finally = if matches!(finally_val, Value::Null) {
+                None
+            } else {
+                Some(value_to_stmt(&finally_val)?)
+            };
+            Ok(Statement::try_catch(body, catches, finally))
+        }
+        "with_block" => {
+            let resources_val = get_field(value, "resources")?;
+            let resources = if let Value::List(ref list_ref) = resources_val {
+                let list = list_ref.borrow();
+                let mut res = Vec::new();
+                for r in list.iter() {
+                    let name = get_string_field(r, "name")?;
+                    let val_node = get_field(r, "value")?;
+                    let expr = value_to_expr(&val_node)?;
+                    res.push((name, expr));
+                }
+                res
+            } else {
+                Vec::new()
+            };
+            let body = value_to_stmt(&get_field(value, "body")?)?;
+            Ok(Statement::WithBlock {
+                resources,
+                body: Box::new(body),
+            })
+        }
+        "defer" => {
+            let body = value_to_stmt(&get_field(value, "body")?)?;
+            Ok(Statement::Defer {
                 body: Box::new(body),
             })
         }
@@ -891,6 +987,50 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("variable".to_string(), args[0].clone());
             map.insert("iterable".to_string(), args[1].clone());
             map.insert("body".to_string(), args[2].clone());
+            Ok(Value::Object(Gc::new(GcCell::new(map))))
+        }),
+    );
+
+    // ast_throw(value)
+    env.define(
+        "ast_throw".into(),
+        new_builtin("ast_throw", |args| {
+            if args.len() != 1 {
+                return Err(RuntimeError::new("ast_throw expects 1 argument"));
+            }
+            let mut map = HashMap::new();
+            map.insert("kind".to_string(), str_val("throw"));
+            map.insert("value".to_string(), args[0].clone());
+            Ok(Value::Object(Gc::new(GcCell::new(map))))
+        }),
+    );
+
+    // ast_try_catch(body, catches_list, finally_or_null)
+    env.define(
+        "ast_try_catch".into(),
+        new_builtin("ast_try_catch", |args| {
+            if args.len() != 3 {
+                return Err(RuntimeError::new("ast_try_catch expects 3 arguments"));
+            }
+            let mut map = HashMap::new();
+            map.insert("kind".to_string(), str_val("try_catch"));
+            map.insert("body".to_string(), args[0].clone());
+            map.insert("catches".to_string(), args[1].clone());
+            map.insert("finally".to_string(), args[2].clone());
+            Ok(Value::Object(Gc::new(GcCell::new(map))))
+        }),
+    );
+
+    // ast_defer(body)
+    env.define(
+        "ast_defer".into(),
+        new_builtin("ast_defer", |args| {
+            if args.len() != 1 {
+                return Err(RuntimeError::new("ast_defer expects 1 argument"));
+            }
+            let mut map = HashMap::new();
+            map.insert("kind".to_string(), str_val("defer"));
+            map.insert("body".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
         }),
     );

@@ -153,6 +153,29 @@ pub enum Statement {
         return_type: Option<TypeAnnotation>,
         body: Box<Statement>, // must be a Block
     },
+    Throw {
+        value: Expression,
+    },
+    TryCatch {
+        body: Box<Statement>, // must be a Block
+        catches: Vec<CatchClause>,
+        finally: Option<Box<Statement>>, // must be a Block if present
+    },
+    WithBlock {
+        resources: Vec<(String, Expression)>,
+        body: Box<Statement>, // must be a Block
+    },
+    Defer {
+        body: Box<Statement>,
+    },
+}
+
+/// A catch clause within a try/catch statement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CatchClause {
+    pub param: String,
+    pub type_annotation: Option<TypeAnnotation>,
+    pub body: Statement, // must be a Block
 }
 
 /// Target of an assignment (variable, property, or index).
@@ -306,6 +329,51 @@ impl Statement {
             params,
             return_type: None,
             body: Box::new(body),
+        }
+    }
+    pub fn throw(value: Expression) -> Self {
+        Statement::Throw { value }
+    }
+    pub fn try_catch(
+        body: Statement,
+        catches: Vec<CatchClause>,
+        finally: Option<Statement>,
+    ) -> Self {
+        Statement::TryCatch {
+            body: Box::new(body),
+            catches,
+            finally: finally.map(Box::new),
+        }
+    }
+    pub fn with_block(
+        resources: Vec<(impl Into<String>, Expression)>,
+        body: Statement,
+    ) -> Self {
+        Statement::WithBlock {
+            resources: resources.into_iter().map(|(n, e)| (n.into(), e)).collect(),
+            body: Box::new(body),
+        }
+    }
+    pub fn defer(body: Statement) -> Self {
+        Statement::Defer {
+            body: Box::new(body),
+        }
+    }
+}
+
+impl CatchClause {
+    pub fn new(param: impl Into<String>, body: Statement) -> Self {
+        CatchClause {
+            param: param.into(),
+            type_annotation: None,
+            body,
+        }
+    }
+    pub fn typed(param: impl Into<String>, ty: TypeAnnotation, body: Statement) -> Self {
+        CatchClause {
+            param: param.into(),
+            type_annotation: Some(ty),
+            body,
         }
     }
 }

@@ -8,17 +8,23 @@ use crate::error::RuntimeError;
 use crate::value::*;
 use crate::builtins;
 
-/// Signal for control flow: normal completion, return, or break.
+/// Signal for control flow: normal completion, return, throw, or break.
 enum ControlFlow {
     None,
     Return(Value),
     /// The value produced by the last expression statement.
     ExprValue(Value),
+    /// A thrown error value propagating up the call stack.
+    Throw(Value),
 }
 
 /// The ish virtual machine / interpreter.
 pub struct IshVm {
     pub global_env: Environment,
+    /// Per-function defer stacks. Each function invocation (and top-level
+    /// `run`) pushes a frame; deferred statements execute in LIFO order
+    /// when the frame is popped at function exit.
+    defer_stack: Vec<Vec<(Statement, Environment)>>,
 }
 
 impl IshVm {
@@ -26,20 +32,61 @@ impl IshVm {
         let env = Environment::new();
         builtins::register_all(&env);
         crate::reflection::register_ast_builtins(&env);
-        IshVm { global_env: env }
+        IshVm {
+            global_env: env,
+            defer_stack: Vec::new(),
+        }
+    }
+
+    /// Push a new (empty) defer frame for a function invocation.
+    fn push_defer_frame(&mut self) {
+        self.defer_stack.push(Vec::new());
+    }
+
+    /// Register a deferred statement on the current function's defer stack.
+    fn register_defer(&mut self, stmt: Statement, env: Environment) {
+        if let Some(frame) = self.defer_stack.last_mut() {
+            frame.push((stmt, env));
+        }
+    }
+
+    /// Pop the current defer frame and execute all deferred statements in
+    /// LIFO order. Errors from deferred statements are silently ignored
+    /// (they do not override in-flight control flow).
+    fn pop_and_run_defers(&mut self) {
+        if let Some(deferred) = self.defer_stack.pop() {
+            for (d, env) in deferred.into_iter().rev() {
+                let _ = self.exec_statement(&d, &env);
+            }
+        }
     }
 
     /// Execute a full program.
     pub fn run(&mut self, program: &Program) -> Result<Value, RuntimeError> {
         let mut last = Value::Null;
         let env = self.global_env.clone();
+        self.push_defer_frame();
         for stmt in &program.statements {
-            match self.exec_statement(stmt, &env)? {
-                ControlFlow::Return(v) => return Ok(v),
-                ControlFlow::ExprValue(v) => last = v,
-                ControlFlow::None => {}
+            match self.exec_statement(stmt, &env) {
+                Ok(ControlFlow::Return(v)) => {
+                    last = v;
+                    break;
+                }
+                Ok(ControlFlow::Throw(v)) => {
+                    self.pop_and_run_defers();
+                    return Err(RuntimeError::new(format!(
+                        "Unhandled throw: {}", v.to_display_string()
+                    )));
+                }
+                Ok(ControlFlow::ExprValue(v)) => last = v,
+                Ok(ControlFlow::None) => {}
+                Err(e) => {
+                    self.pop_and_run_defers();
+                    return Err(e);
+                }
             }
         }
+        self.pop_and_run_defers();
         Ok(last)
     }
 
@@ -112,13 +159,20 @@ impl IshVm {
 
             Statement::Block { statements } => {
                 let block_env = env.child();
+                let mut result = ControlFlow::None;
                 for s in statements {
+                    // Register defer on the function-level defer stack
+                    if let Statement::Defer { body } = s {
+                        self.register_defer(*body.clone(), block_env.clone());
+                        continue;
+                    }
                     match self.exec_statement(s, &block_env)? {
-                        ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
+                        ControlFlow::Return(v) => { result = ControlFlow::Return(v); break; }
+                        ControlFlow::Throw(v) => { result = ControlFlow::Throw(v); break; }
                         ControlFlow::None | ControlFlow::ExprValue(_) => {}
                     }
                 }
-                Ok(ControlFlow::None)
+                Ok(result)
             }
 
             Statement::If {
@@ -144,6 +198,7 @@ impl IshVm {
                     }
                     match self.exec_statement(body, env)? {
                         ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
+                        ControlFlow::Throw(v) => return Ok(ControlFlow::Throw(v)),
                         ControlFlow::None | ControlFlow::ExprValue(_) => {}
                     }
                 }
@@ -163,6 +218,7 @@ impl IshVm {
                         loop_env.define(variable.clone(), item);
                         match self.exec_statement(body, &loop_env)? {
                             ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
+                            ControlFlow::Throw(v) => return Ok(ControlFlow::Throw(v)),
                             ControlFlow::None | ControlFlow::ExprValue(_) => {}
                         }
                     }
@@ -202,7 +258,121 @@ impl IshVm {
                 env.define(name.clone(), func);
                 Ok(ControlFlow::None)
             }
+
+            Statement::Throw { value } => {
+                let val = self.eval_expression(value, env)?;
+                Ok(ControlFlow::Throw(val))
+            }
+
+            Statement::TryCatch { body, catches, finally } => {
+                // Collect thrown value from either ControlFlow::Throw or
+                // a RuntimeError with thrown_value (throw that crossed a
+                // function boundary via call_function).
+                let (result, thrown) = match self.exec_statement(body, env) {
+                    Ok(ControlFlow::Throw(v)) => (ControlFlow::None, Some(v)),
+                    Ok(other) => (other, None),
+                    Err(e) if e.thrown_value.is_some() => {
+                        (ControlFlow::None, e.thrown_value)
+                    }
+                    Err(e) => return Err(e),
+                };
+                let result = if let Some(thrown) = thrown {
+                    // Try to match a catch clause
+                    let mut caught = false;
+                    let mut catch_result = ControlFlow::None;
+                    for clause in catches {
+                        // For now, all catch clauses match (type-based
+                        // matching will come with the type system).
+                        let catch_env = env.child();
+                        catch_env.define(clause.param.clone(), thrown.clone());
+                        catch_result = self.exec_statement(&clause.body, &catch_env)?;
+                        caught = true;
+                        break;
+                    }
+                    if caught {
+                        catch_result
+                    } else {
+                        // No matching catch — re-throw
+                        ControlFlow::Throw(thrown)
+                    }
+                } else {
+                    result
+                };
+                // Execute finally block if present (always runs)
+                if let Some(fin) = finally {
+                    let fin_result = self.exec_statement(fin, env)?;
+                    // Per decision: no return from finally.
+                    // finally block does NOT override the result.
+                    // But if finally throws, that replaces the original.
+                    if let ControlFlow::Throw(_) = fin_result {
+                        return Ok(fin_result);
+                    }
+                }
+                Ok(result)
+            }
+
+            Statement::WithBlock { resources, body } => {
+                let with_env = env.child();
+                let mut initialized: Vec<(String, Value)> = Vec::new();
+                // Initialize resources in order
+                for (name, expr) in resources {
+                    match self.eval_expression(expr, &with_env) {
+                        Ok(val) => {
+                            with_env.define(name.clone(), val.clone());
+                            initialized.push((name.clone(), val));
+                        }
+                        Err(e) => {
+                            // Close already-initialized resources in reverse order
+                            for (_, res) in initialized.into_iter().rev() {
+                                let _ = self.try_close(&res);
+                            }
+                            return Err(e);
+                        }
+                    }
+                }
+                // Execute body
+                let result = self.exec_statement(body, &with_env)?;
+                // Close resources in reverse order
+                let mut close_error: Option<Value> = None;
+                for (_, res) in initialized.into_iter().rev() {
+                    if let Err(_e) = self.try_close(&res) {
+                        // If close fails, save the error
+                        if close_error.is_none() {
+                            close_error = Some(Value::String(Rc::new(_e.message)));
+                        }
+                    }
+                }
+                // If body threw and close also errored, body error takes precedence
+                match result {
+                    ControlFlow::Throw(_) => Ok(result),
+                    other => {
+                        if let Some(err) = close_error {
+                            Ok(ControlFlow::Throw(err))
+                        } else {
+                            Ok(other)
+                        }
+                    }
+                }
+            }
+
+            Statement::Defer { body } => {
+                // Register on the enclosing function's defer stack.
+                self.register_defer(*body.clone(), env.clone());
+                Ok(ControlFlow::None)
+            }
         }
+    }
+
+    /// Try to call close() on a value, used by WithBlock.
+    fn try_close(&mut self, value: &Value) -> Result<(), RuntimeError> {
+        if let Value::Object(ref obj_ref) = value {
+            let map = obj_ref.borrow();
+            if let Some(close_fn) = map.get("close").cloned() {
+                drop(map);
+                self.call_function(&close_fn, &[])?;
+            }
+        }
+        Ok(())
     }
 
     /// Evaluate an expression in the given environment.
@@ -356,10 +526,21 @@ impl IshVm {
                 for (param, arg) in f.params.iter().zip(args.iter()) {
                     call_env.define(param.clone(), arg.clone());
                 }
-                match self.exec_statement(&f.body, &call_env)? {
+                // Function-scoped defer: push a defer frame, run body,
+                // then execute all deferred statements before returning.
+                self.push_defer_frame();
+                let result = self.exec_statement(&f.body, &call_env);
+                self.pop_and_run_defers();
+                match result? {
                     ControlFlow::Return(v) => Ok(v),
                     ControlFlow::ExprValue(v) => Ok(v),
                     ControlFlow::None => Ok(Value::Null),
+                    // Per proposal: throw does not cross function boundaries.
+                    // A thrown value that escapes a function body is re-thrown
+                    // by the default return handler (streamlined mode).
+                    ControlFlow::Throw(v) => {
+                        Err(RuntimeError::thrown(v))
+                    }
                 }
             }
             Value::BuiltinFunction(b) => (b.func)(args),
@@ -497,7 +678,7 @@ impl Default for IshVm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ish_ast::builder::ProgramBuilder;
+    use ish_ast::builder::{ProgramBuilder, BlockBuilder};
 
     #[test]
     fn test_variable_decl_and_lookup() {
@@ -721,5 +902,551 @@ mod tests {
         let mut vm = IshVm::new();
         let result = vm.run(&program).unwrap();
         assert_eq!(result, Value::String(Rc::new("hello world".into())));
+    }
+
+    // ── Error handling tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_throw_unhandled_becomes_error() {
+        // throw "boom"; -> should produce a RuntimeError
+        let program = ProgramBuilder::new()
+            .stmt(Statement::throw(Expression::string("boom")))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("boom"));
+    }
+
+    #[test]
+    fn test_try_catch_basic() {
+        // try { throw "oops"; } catch(e) { e; }
+        let program = ProgramBuilder::new()
+            .stmt(Statement::try_catch(
+                Statement::block(vec![Statement::throw(Expression::string("oops"))]),
+                vec![CatchClause::new("e", Statement::block(vec![
+                    Statement::expr_stmt(Expression::ident("e")),
+                ]))],
+                None,
+            ))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        // The result of the program is Null because try_catch itself
+        // returns ControlFlow::None at the top level. The caught value
+        // doesn't propagate as the program result.
+        // Let's verify it doesn't error:
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_try_catch_returns_caught_value() {
+        // fn test() { try { throw 42; } catch(e) { return e; } }
+        // test()  -> 42
+        let program = ProgramBuilder::new()
+            .function("test", &[], |b| {
+                b.try_catch(
+                    |b| b.throw(Expression::int(42)),
+                    vec![CatchClause::new("e", Statement::block(vec![
+                        Statement::ret(Some(Expression::ident("e"))),
+                    ]))],
+                    None::<fn(BlockBuilder) -> BlockBuilder>,
+                )
+            })
+            .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn test_try_finally_runs_on_normal() {
+        // Tests that the finally block runs on normal completion.
+        // let x = 0;
+        // try { x = 1; } catch(e) {} finally { x = x + 10; }
+        // x  -> 11
+        let program = ProgramBuilder::new()
+            .var_decl("x", Expression::int(0))
+            .stmt(Statement::try_catch(
+                Statement::block(vec![Statement::assign("x", Expression::int(1))]),
+                vec![CatchClause::new("e", Statement::block(vec![]))],
+                Some(Statement::block(vec![
+                    Statement::assign("x", Expression::binary(
+                        BinaryOperator::Add,
+                        Expression::ident("x"),
+                        Expression::int(10),
+                    )),
+                ])),
+            ))
+            .expr_stmt(Expression::ident("x"))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Int(11));
+    }
+
+    #[test]
+    fn test_try_finally_runs_on_throw() {
+        // Tests that finally block runs when an error is thrown and caught.
+        // let x = 0;
+        // try { throw "err"; } catch(e) { x = 1; } finally { x = x + 10; }
+        // x  -> 11
+        let program = ProgramBuilder::new()
+            .var_decl("x", Expression::int(0))
+            .stmt(Statement::try_catch(
+                Statement::block(vec![Statement::throw(Expression::string("err"))]),
+                vec![CatchClause::new("e", Statement::block(vec![
+                    Statement::assign("x", Expression::int(1)),
+                ]))],
+                Some(Statement::block(vec![
+                    Statement::assign("x", Expression::binary(
+                        BinaryOperator::Add,
+                        Expression::ident("x"),
+                        Expression::int(10),
+                    )),
+                ])),
+            ))
+            .expr_stmt(Expression::ident("x"))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Int(11));
+    }
+
+    #[test]
+    fn test_throw_does_not_cross_function_boundary() {
+        // fn bad() { throw "error"; }
+        // bad()  -> should produce RuntimeError
+        let program = ProgramBuilder::new()
+            .function("bad", &[], |b| {
+                b.throw(Expression::string("error"))
+            })
+            .expr_stmt(Expression::call(Expression::ident("bad"), vec![]))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_throw_from_function_caught_by_caller() {
+        // fn bad() { throw 99; }
+        // fn wrapper() {
+        //   try { bad(); } catch(e) { return e; }
+        // }
+        // wrapper()  -> 99
+        let program = ProgramBuilder::new()
+            .function("bad", &[], |b| {
+                b.throw(Expression::int(99))
+            })
+            .function("wrapper", &[], |b| {
+                b.try_catch(
+                    |b| b.expr_stmt(Expression::call(Expression::ident("bad"), vec![])),
+                    vec![CatchClause::new("e", Statement::block(vec![
+                        Statement::ret(Some(Expression::ident("e"))),
+                    ]))],
+                    None::<fn(BlockBuilder) -> BlockBuilder>,
+                )
+            })
+            .expr_stmt(Expression::call(Expression::ident("wrapper"), vec![]))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Int(99));
+    }
+
+    #[test]
+    fn test_with_block_calls_close() {
+        // Tests that `with` calls close() on exit.
+        // let closed = false;
+        // fn make_resource() {
+        //   return { close: fn() { closed = true; } };
+        // }
+        // with (r = make_resource()) { }
+        // closed  -> true
+        let program = Program::new(vec![
+            Statement::var_decl("closed", Expression::bool(false)),
+            Statement::function_decl(
+                "make_resource",
+                vec![],
+                Statement::block(vec![
+                    Statement::ret(Some(Expression::object(vec![
+                        ("close", Expression::lambda(
+                            vec![],
+                            Statement::block(vec![
+                                Statement::assign("closed", Expression::bool(true)),
+                            ]),
+                        )),
+                    ]))),
+                ]),
+            ),
+            Statement::with_block(
+                vec![("r", Expression::call(Expression::ident("make_resource"), vec![]))],
+                Statement::block(vec![]),
+            ),
+            Statement::expr_stmt(Expression::ident("closed")),
+        ]);
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_with_block_calls_close_on_throw() {
+        // Tests that `with` calls close() even when the body throws.
+        // let closed = false;
+        // fn make_resource() {
+        //   return { close: fn() { closed = true; } };
+        // }
+        // try {
+        //   with (r = make_resource()) { throw "err"; }
+        // } catch(e) {}
+        // closed  -> true
+        let program = Program::new(vec![
+            Statement::var_decl("closed", Expression::bool(false)),
+            Statement::function_decl(
+                "make_resource",
+                vec![],
+                Statement::block(vec![
+                    Statement::ret(Some(Expression::object(vec![
+                        ("close", Expression::lambda(
+                            vec![],
+                            Statement::block(vec![
+                                Statement::assign("closed", Expression::bool(true)),
+                            ]),
+                        )),
+                    ]))),
+                ]),
+            ),
+            Statement::try_catch(
+                Statement::block(vec![
+                    Statement::with_block(
+                        vec![("r", Expression::call(Expression::ident("make_resource"), vec![]))],
+                        Statement::block(vec![Statement::throw(Expression::string("err"))]),
+                    ),
+                ]),
+                vec![CatchClause::new("e", Statement::block(vec![]))],
+                None,
+            ),
+            Statement::expr_stmt(Expression::ident("closed")),
+        ]);
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_defer_executes_at_function_exit() {
+        // Defer is function-scoped: the deferred statement runs when the
+        // enclosing function (here, the top-level `run`) exits — not when
+        // the block exits.
+        // let log = [];
+        // {
+        //   defer list_push(log, "deferred");
+        //   list_push(log, "body");
+        // }
+        // log  -> ["body", "deferred"]
+        let program = ProgramBuilder::new()
+            .var_decl("log", Expression::list(vec![]))
+            .stmt(Statement::block(vec![
+                Statement::defer(Statement::expr_stmt(Expression::call(
+                    Expression::ident("list_push"),
+                    vec![Expression::ident("log"), Expression::string("deferred")],
+                ))),
+                Statement::expr_stmt(Expression::call(
+                    Expression::ident("list_push"),
+                    vec![Expression::ident("log"), Expression::string("body")],
+                )),
+            ]))
+            .expr_stmt(Expression::ident("log"))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        if let Value::List(ref list_ref) = result {
+            let list = list_ref.borrow();
+            assert_eq!(list.len(), 2);
+            assert_eq!(list[0], Value::String(Rc::new("body".into())));
+            assert_eq!(list[1], Value::String(Rc::new("deferred".into())));
+        } else {
+            panic!("expected list, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_defer_lifo_order() {
+        // Multiple defers execute in LIFO order at function exit.
+        // let log = [];
+        // {
+        //   defer list_push(log, "first");
+        //   defer list_push(log, "second");
+        // }
+        // log  -> ["second", "first"]
+        let program = ProgramBuilder::new()
+            .var_decl("log", Expression::list(vec![]))
+            .stmt(Statement::block(vec![
+                Statement::defer(Statement::expr_stmt(Expression::call(
+                    Expression::ident("list_push"),
+                    vec![Expression::ident("log"), Expression::string("first")],
+                ))),
+                Statement::defer(Statement::expr_stmt(Expression::call(
+                    Expression::ident("list_push"),
+                    vec![Expression::ident("log"), Expression::string("second")],
+                ))),
+            ]))
+            .expr_stmt(Expression::ident("log"))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        if let Value::List(ref list_ref) = result {
+            let list = list_ref.borrow();
+            assert_eq!(list.len(), 2);
+            assert_eq!(list[0], Value::String(Rc::new("second".into())));
+            assert_eq!(list[1], Value::String(Rc::new("first".into())));
+        } else {
+            panic!("expected list, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_defer_function_scoped() {
+        // Defer inside a conditional block runs at function exit, not
+        // block exit — the resource outlives the if-block.
+        //
+        // fn test() {
+        //   let log = [];
+        //   if (true) {
+        //     defer list_push(log, "deferred");
+        //     list_push(log, "inside-if");
+        //   }
+        //   list_push(log, "after-if");
+        //   return log;
+        // }
+        // test()  -> ["inside-if", "after-if", "deferred"]
+        let program = ProgramBuilder::new()
+            .function("test", &[], |b| {
+                b.var_decl("log", Expression::list(vec![]))
+                    .stmt(Statement::if_stmt(
+                        Expression::bool(true),
+                        Statement::block(vec![
+                            Statement::defer(Statement::expr_stmt(Expression::call(
+                                Expression::ident("list_push"),
+                                vec![Expression::ident("log"), Expression::string("deferred")],
+                            ))),
+                            Statement::expr_stmt(Expression::call(
+                                Expression::ident("list_push"),
+                                vec![Expression::ident("log"), Expression::string("inside-if")],
+                            )),
+                        ]),
+                        None,
+                    ))
+                    .stmt(Statement::expr_stmt(Expression::call(
+                        Expression::ident("list_push"),
+                        vec![Expression::ident("log"), Expression::string("after-if")],
+                    )))
+                    .ret(Expression::ident("log"))
+            })
+            .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        if let Value::List(ref list_ref) = result {
+            let list = list_ref.borrow();
+            assert_eq!(list.len(), 3);
+            assert_eq!(list[0], Value::String(Rc::new("inside-if".into())));
+            assert_eq!(list[1], Value::String(Rc::new("after-if".into())));
+            assert_eq!(list[2], Value::String(Rc::new("deferred".into())));
+        } else {
+            panic!("expected list, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_defer_loop_accumulates() {
+        // Defer inside a loop accumulates N deferred calls, all running
+        // at function exit in LIFO order.
+        //
+        // fn test() {
+        //   let log = [];
+        //   for_each (x in [1, 2, 3]) {
+        //     defer list_push(log, x);
+        //   }
+        //   return log;
+        // }
+        // test()  -> [3, 2, 1]
+        let program = ProgramBuilder::new()
+            .function("test", &[], |b| {
+                b.var_decl("log", Expression::list(vec![]))
+                    .stmt(Statement::for_each(
+                        "x",
+                        Expression::list(vec![
+                            Expression::int(1),
+                            Expression::int(2),
+                            Expression::int(3),
+                        ]),
+                        Statement::block(vec![
+                            Statement::defer(Statement::expr_stmt(Expression::call(
+                                Expression::ident("list_push"),
+                                vec![Expression::ident("log"), Expression::ident("x")],
+                            ))),
+                        ]),
+                    ))
+                    .ret(Expression::ident("log"))
+            })
+            .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        if let Value::List(ref list_ref) = result {
+            let list = list_ref.borrow();
+            assert_eq!(list.len(), 3);
+            assert_eq!(list[0], Value::Int(3));
+            assert_eq!(list[1], Value::Int(2));
+            assert_eq!(list[2], Value::Int(1));
+        } else {
+            panic!("expected list, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_defer_lambda_boundary() {
+        // Defer inside a lambda binds to the lambda, not the outer function.
+        //
+        // fn test() {
+        //   let log = [];
+        //   let f = fn() {
+        //     defer list_push(log, "lambda-defer");
+        //     list_push(log, "lambda-body");
+        //   };
+        //   f();
+        //   list_push(log, "after-lambda");
+        //   return log;
+        // }
+        // test()  -> ["lambda-body", "lambda-defer", "after-lambda"]
+        let program = ProgramBuilder::new()
+            .function("test", &[], |b| {
+                b.var_decl("log", Expression::list(vec![]))
+                    .var_decl("f", Expression::lambda(
+                        vec![],
+                        Statement::block(vec![
+                            Statement::defer(Statement::expr_stmt(Expression::call(
+                                Expression::ident("list_push"),
+                                vec![Expression::ident("log"), Expression::string("lambda-defer")],
+                            ))),
+                            Statement::expr_stmt(Expression::call(
+                                Expression::ident("list_push"),
+                                vec![Expression::ident("log"), Expression::string("lambda-body")],
+                            )),
+                        ]),
+                    ))
+                    .stmt(Statement::expr_stmt(Expression::call(
+                        Expression::ident("f"), vec![],
+                    )))
+                    .stmt(Statement::expr_stmt(Expression::call(
+                        Expression::ident("list_push"),
+                        vec![Expression::ident("log"), Expression::string("after-lambda")],
+                    )))
+                    .ret(Expression::ident("log"))
+            })
+            .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        if let Value::List(ref list_ref) = result {
+            let list = list_ref.borrow();
+            assert_eq!(list.len(), 3);
+            assert_eq!(list[0], Value::String(Rc::new("lambda-body".into())));
+            assert_eq!(list[1], Value::String(Rc::new("lambda-defer".into())));
+            assert_eq!(list[2], Value::String(Rc::new("after-lambda".into())));
+        } else {
+            panic!("expected list, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_new_error_builtin() {
+        // is_error(new_error("test"))  -> true
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("is_error"),
+                vec![Expression::call(
+                    Expression::ident("new_error"),
+                    vec![Expression::string("test message")],
+                )],
+            ))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_throw_error_caught_with_message() {
+        // fn test() {
+        //   try { throw new_error("boom"); }
+        //   catch (e) { return error_message(e); }
+        // }
+        // test()  -> "boom"
+        let program = ProgramBuilder::new()
+            .function("test", &[], |b| {
+                b.try_catch(
+                    |b| b.throw(Expression::call(
+                        Expression::ident("new_error"),
+                        vec![Expression::string("boom")],
+                    )),
+                    vec![CatchClause::new("e", Statement::block(vec![
+                        Statement::ret(Some(Expression::call(
+                            Expression::ident("error_message"),
+                            vec![Expression::ident("e")],
+                        ))),
+                    ]))],
+                    None::<fn(BlockBuilder) -> BlockBuilder>,
+                )
+            })
+            .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::String(Rc::new("boom".into())));
+    }
+
+    #[test]
+    fn test_try_catch_no_throw_runs_normally() {
+        // try { 42; } catch(e) { 0; }  -> Null (try_catch doesn't produce ExprValue)
+        // But let's test with a variable:
+        // let x = 0;
+        // try { x = 42; } catch(e) { x = 0; }
+        // x  -> 42
+        let program = ProgramBuilder::new()
+            .var_decl("x", Expression::int(0))
+            .stmt(Statement::try_catch(
+                Statement::block(vec![Statement::assign("x", Expression::int(42))]),
+                vec![CatchClause::new("e", Statement::block(vec![
+                    Statement::assign("x", Expression::int(0)),
+                ]))],
+                None,
+            ))
+            .expr_stmt(Expression::ident("x"))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Int(42));
     }
 }

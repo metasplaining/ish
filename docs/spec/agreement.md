@@ -3,7 +3,7 @@ title: ish Agreement and Marked Language Features
 category: spec
 audience: [all]
 status: draft
-last-verified: 2026-03-10
+last-verified: 2026-03-11
 depends-on: []
 ---
 
@@ -22,6 +22,7 @@ Features that can be configured to be marked or unmarked in ish:
 - Function return type
 - Async type (wait or defer)
 - Errors thrown by function
+- Error mode preset (streamlined, encumbered, or no-throw)
 - Mutability (whether a variable or property is mutable or immutable)
 - Numeric type (exact numeric type such as `i32` vs. `f64`, rather than a default)
 - Numeric overflow behavior (wrapping, panicking, or saturating)

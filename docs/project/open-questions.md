@@ -3,7 +3,7 @@ title: ish Open Questions
 category: project
 audience: [all]
 status: draft
-last-verified: 2026-03-10
+last-verified: 2026-03-11
 depends-on: [docs/spec/types.md, docs/spec/modules.md, docs/spec/reasoning.md, docs/spec/agreement.md, docs/spec/execution.md, docs/spec/memory.md, docs/spec/polymorphism.md]
 ---
 
@@ -20,7 +20,8 @@ See also [docs/spec/syntax.md](../spec/syntax.md).
 - [ ] **No syntax description or examples.** What is the basic expression and statement syntax? Is ish C-family, ML-family, Lisp-family, or something novel? What are the delimiters? How are comments written?
 - [ ] **No description of control flow.** What looping constructs exist? Is there pattern matching? How does early return work?
 - [ ] **No description of functions.** Function declaration syntax? First-class values? Closures? Anonymous / lambda functions? Overloading?
-- [ ] **No description of error handling.** Exceptions? Result types? Panics? How does error handling vary across the encumbrance continuum?
+- [x] **~~No description of error handling.~~** Resolved — ish uses thrown exceptions with try/catch/finally, with blocks, and defer. See [docs/user-guide/error-handling.md](../user-guide/error-handling.md) and [proposal](proposals/error-handling.md).
+- [ ] **Error handling open questions from proposal.** How should `with` identify the close method (annotation vs. convention)? ~~Should `defer` follow Go's function-scoped semantics or be block-scoped (currently block-scoped)?~~ Resolved — defer is function-scoped per [defer-scoping proposal](proposals/defer-scoping.md). Should the `?` operator be implemented as Rust-style sugar? What is the syntax for error mode configuration at project/module/function level?
 - [ ] **No description of concurrency / parallelism.** Async/await? Threads? Channels? Actors? Interaction with memory management?
 
 ---

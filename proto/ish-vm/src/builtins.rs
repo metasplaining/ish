@@ -16,6 +16,7 @@ pub fn register_all(env: &Environment) {
     register_objects(env);
     register_types(env);
     register_conversion(env);
+    register_errors(env);
 }
 
 // ── I/O ─────────────────────────────────────────────────────────────────────
@@ -590,6 +591,58 @@ fn register_conversion(env: &Environment) {
                     "cannot convert {} to float",
                     args[0].type_name()
                 ))),
+            }
+        }),
+    );
+}
+
+// ── Error Handling ──────────────────────────────────────────────────────────
+
+fn register_errors(env: &Environment) {
+    // new_error(message) -> creates an Error object
+    env.define(
+        "new_error".into(),
+        new_builtin("new_error", |args| {
+            if args.len() != 1 {
+                return Err(RuntimeError::new("new_error expects 1 argument (message)"));
+            }
+            let msg = args[0].to_display_string();
+            let mut map = std::collections::HashMap::new();
+            map.insert("message".to_string(), Value::String(Rc::new(msg)));
+            map.insert("__is_error__".to_string(), Value::Bool(true));
+            Ok(new_object(map))
+        }),
+    );
+
+    // is_error(value) -> checks if a value is an Error object
+    env.define(
+        "is_error".into(),
+        new_builtin("is_error", |args| {
+            if args.len() != 1 {
+                return Err(RuntimeError::new("is_error expects 1 argument"));
+            }
+            let result = if let Value::Object(ref obj_ref) = args[0] {
+                let map = obj_ref.borrow();
+                matches!(map.get("__is_error__"), Some(Value::Bool(true)))
+            } else {
+                false
+            };
+            Ok(Value::Bool(result))
+        }),
+    );
+
+    // error_message(error) -> extracts the message from an Error object
+    env.define(
+        "error_message".into(),
+        new_builtin("error_message", |args| {
+            if args.len() != 1 {
+                return Err(RuntimeError::new("error_message expects 1 argument"));
+            }
+            if let Value::Object(ref obj_ref) = args[0] {
+                let map = obj_ref.borrow();
+                Ok(map.get("message").cloned().unwrap_or(Value::Null))
+            } else {
+                Err(RuntimeError::new("error_message expects an error object"))
             }
         }),
     );
