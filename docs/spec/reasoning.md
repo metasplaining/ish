@@ -4,7 +4,7 @@ category: spec
 audience: [all]
 status: draft
 last-verified: 2026-03-10
-depends-on: [docs/spec/types.md, docs/spec/agreement.md]
+depends-on: [docs/spec/types.md, docs/spec/assurance-ledger.md]
 ---
 
 # ish Reasoning System
@@ -62,7 +62,7 @@ interface ReasoningContext {
     symbol_table: SymbolTable,
     query(prop: Proposition) -> bool,
     parent_node: AstNode?,
-    encumbrance: EncumbranceLevel,
+    assurance_level: AssuranceLevel,
 }
 ```
 
@@ -154,13 +154,13 @@ Open questions for the reasoning system. See also [docs/project/open-questions.m
 
 - [ ] **How developers annotate code.** Are annotations attributes/decorators, inline expressions, or special comments? Where can annotations appear? How does a developer distinguish between an assertion and a query?
 
-### Interaction with Encumbrance
+### Interaction with Assurance Levels
 
-- [ ] **How the reasoning system varies with encumbrance level.** In streamlined mode, are annotations ignored, deferred to runtime, or evaluated? Can the level of reasoning strictness be independently configured?
+- [ ] **How the reasoning system varies with assurance level.** In low-assurance mode, are annotations ignored, deferred to runtime, or evaluated? Can the level of reasoning strictness be independently configured?
 
-### Interaction with the Agreement System
+### Interaction with the Assurance Ledger
 
-- [ ] **Relationship to agreement checks.** Are agreements implemented as reasoning propositions? How are pre-conditions and post-conditions expressed?
+- [ ] **Relationship to assurance ledger checks.** Are ledger entries implemented as reasoning propositions? How are pre-conditions and post-conditions expressed?
 
 ### Compound Proposition Semantics
 

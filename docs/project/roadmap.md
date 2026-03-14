@@ -19,7 +19,7 @@ The language is being designed iteratively. A Rust prototype explores key ideas.
 
 - [x] Core type system design (primitives, objects, lists, unions, optionals)
 - [x] Module system design (visibility, namespacing)
-- [x] Agreement/encumbrance concept
+- [x] Assurance Ledger system
 - [x] Execution configurations concept
 - [x] Reasoning system concept
 - [x] Prototype: AST representation

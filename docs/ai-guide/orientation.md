@@ -13,19 +13,19 @@ This document provides the minimum context an AI coding agent needs to work effe
 
 ## What Is ish?
 
-ish is a general-purpose programming language organized around a **streamlined ↔ encumbered continuum**. Every language feature can be used in a streamlined (fewer constraints, faster to write) or encumbered (more constraints, safer) mode. The programmer chooses per-feature.
+ish is a general-purpose programming language organized around a **low-assurance ↔ high-assurance continuum**. Every language feature can be used in a low-assurance (fewer constraints, faster to write) or high-assurance (more constraints, safer) mode. The programmer chooses per-feature.
 
 ## Key Concepts
 
 | Concept | Definition | Spec |
 |---------|-----------|------|
-| Encumbrance | The degree of constraint applied to a feature | [agreement.md](../spec/agreement.md) |
-| Streamlined | Minimal constraints; dynamic-language-like | [agreement.md](../spec/agreement.md) |
-| Encumbered | Maximum constraints; static-language-like | [agreement.md](../spec/agreement.md) |
-| Marking | Explicit syntax that moves a feature along the continuum | [agreement.md](../spec/agreement.md) |
-| Agreement | The protocol by which code negotiates encumbrance | [agreement.md](../spec/agreement.md) |
-| Execution configuration | Runtime profiles (dev/test/prod) that enforce encumbrance levels | [execution.md](../spec/execution.md) |
-| Polymorphism | Currently structural typing; nominal typing is encumbered | [polymorphism.md](../spec/polymorphism.md) |
+| Assurance level | The degree of constraint applied to a feature | [assurance-ledger.md](../spec/assurance-ledger.md) |
+| Low-assurance | Minimal constraints; dynamic-language-like | [assurance-ledger.md](../spec/assurance-ledger.md) |
+| High-assurance | Maximum constraints; static-language-like | [assurance-ledger.md](../spec/assurance-ledger.md) |
+| Standard | A named configuration that governs what the ledger tracks within its scope | [assurance-ledger.md](../spec/assurance-ledger.md) |
+| Entry | A recorded fact about a specific item in the assurance ledger | [assurance-ledger.md](../spec/assurance-ledger.md) |
+| Execution configuration | Runtime profiles (dev/test/prod) that enforce assurance levels | [execution.md](../spec/execution.md) |
+| Polymorphism | Currently structural typing; nominal typing is high-assurance | [polymorphism.md](../spec/polymorphism.md) |
 
 See [GLOSSARY.md](../../GLOSSARY.md) for the full glossary.
 
@@ -69,8 +69,8 @@ When working on ish, load context in layers:
 ## Common AI Tasks
 
 See the playbooks for workflow-specific guidance:
-- [Streamlined code](playbook-streamlined.md)
-- [Encumbered code](playbook-encumbered.md)
+- [Low-assurance code](playbook-low-assurance.md)
+- [High-assurance code](playbook-high-assurance.md)
 - [Mixed-mode code](playbook-mixed.md)
 - [Common patterns](patterns.md)
 - [Antipatterns to avoid](antipatterns.md)

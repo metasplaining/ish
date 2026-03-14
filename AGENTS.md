@@ -27,7 +27,7 @@ cd proto && cargo run -p ish-shell     # Run end-to-end demos (6 verifications)
 
 | Path | Contents |
 |------|----------|
-| `docs/spec/` | Language specification (types, modules, reasoning, agreement, execution, memory, polymorphism) |
+| `docs/spec/` | Language specification (types, modules, reasoning, assurance ledger, execution, memory, polymorphism) |
 | `docs/architecture/` | Architecture and internals of the language processor |
 | `docs/user-guide/` | User guide for human developers |
 | `docs/ai-guide/` | User guide and playbooks for AI developers |
@@ -40,7 +40,7 @@ cd proto && cargo run -p ish-shell     # Run end-to-end demos (6 verifications)
 ## Key Concepts
 
 - See [GLOSSARY.md](GLOSSARY.md) for all terminology.
-- ish has a **streamlined ↔ encumbered continuum** — see [docs/spec/agreement.md](docs/spec/agreement.md).
+- ish has a **low-assurance ↔ high-assurance continuum** — see [docs/spec/assurance-ledger.md](docs/spec/assurance-ledger.md).
 - The prototype has **no parser** — programs are built as ASTs in Rust using builder APIs or convenience constructors.
 - The prototype proves three mechanisms: interpreted execution, compiled execution (AST → Rust → `.so` → dynamic load), and self-hosting (analyzer, generator, stdlib all written as ish programs).
 

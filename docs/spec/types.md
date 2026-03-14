@@ -4,7 +4,7 @@ category: spec
 audience: [all]
 status: draft
 last-verified: 2026-03-11
-depends-on: [docs/spec/agreement.md, docs/spec/polymorphism.md, docs/spec/memory.md]
+depends-on: [docs/spec/assurance-ledger.md, docs/spec/polymorphism.md, docs/spec/memory.md]
 ---
 
 # ish Type System
@@ -22,7 +22,7 @@ The ish type system has four primary goals:
 
 The ish type system draws heavily from TypeScript's approach to types. Like TypeScript, ish types describe the *set of possible values* a variable might hold. Unlike most type systems that classify values into broad categories (e.g., "this is an integer"), ish types can be as narrow as a single literal value.
 
-This set-of-values perspective is the foundation for the code analyzer's ability to reason about code. It also enables the streamlined ↔ encumbered continuum: in streamlined mode, types are inferred and permissive; in encumbered mode, types are explicit and strict.
+This set-of-values perspective is the foundation for the code analyzer's ability to reason about code. It also enables the low-assurance ↔ high-assurance continuum: in low-assurance mode, types are inferred and permissive; in high-assurance mode, types are explicit and strict.
 
 ---
 
@@ -52,11 +52,11 @@ ish uses the same primitive types as Rust, since all ish code maps to Rust at so
 
 `isize` is intentionally excluded — ish does not expose user-facing pointer operations, so only `usize` (for collection indexing) is needed.
 
-In streamlined mode, numeric literals without annotations default to `f64` (matching JavaScript's behavior, which is familiar to most developers). In encumbered mode, the developer must specify the exact numeric type, either via an explicit annotation or through type inference within the same statement (e.g., passing a literal to a function with a typed parameter).
+In low-assurance mode, numeric literals without annotations default to `f64` (matching JavaScript's behavior, which is familiar to most developers). In high-assurance mode, the developer must specify the exact numeric type, either via an explicit annotation or through type inference within the same statement (e.g., passing a literal to a function with a typed parameter).
 
-**Integer overflow** behavior is configurable via encumbrance. Options include wrapping, panicking, or saturating.
+**Integer overflow** behavior is configurable via the active standard. Options include wrapping, panicking, or saturating.
 
-**Implicit numeric conversions** (e.g., `i32` → `i64`) are configurable via encumbrance. In streamlined mode, safe widening conversions may be implicit. In encumbered mode, all conversions must be explicit.
+**Implicit numeric conversions** (e.g., `i32` → `i64`) are configurable via the active standard. In low-assurance mode, safe widening conversions may be implicit. In high-assurance mode, all conversions must be explicit.
 
 ### Literal Types
 
@@ -157,7 +157,7 @@ let pid: ProductId = ProductId(42);
 // uid and pid are NOT interchangeable, even though both wrap i64
 ```
 
-The structural/nominal choice does not vary with encumbrance level. A type is structural unless explicitly declared nominal.
+The structural/nominal choice does not vary with assurance level. A type is structural unless explicitly declared nominal.
 
 #### Open and Closed Object Types
 
@@ -185,7 +185,7 @@ An optional property is typed as `T | null` — when absent, accessing it yields
 
 #### Mutable and Immutable Properties
 
-Individual object properties can be marked as mutable or immutable. Depending on encumbrance configuration, specifying mutability may be required.
+Individual object properties can be marked as mutable or immutable. Depending on the active standard, specifying mutability may be required.
 
 #### Index Signatures
 
@@ -268,14 +268,14 @@ let x: i32? = maybeGetNumber();
 
 ### Inference
 
-In streamlined mode, types are inferred from usage. Developers are not required to write type annotations. The code analyzer tracks the set of possible values for each variable at each point in the program.
+In low-assurance mode, types are inferred from usage. Developers are not required to write type annotations. The code analyzer tracks the set of possible values for each variable at each point in the program.
 
 ```
 let x = 5;         // inferred type: 5
 let y = x + 1;     // inferred type: 6 (evaluated at compile time)
 ```
 
-In encumbered mode, the code analyzer may require explicit type annotations where inference is ambiguous.
+In high-assurance mode, the code analyzer may require explicit type annotations where inference is ambiguous.
 
 ### Narrowing
 
@@ -317,7 +317,7 @@ let x = 5;       // literal type: 5 (immutable — no widening needed)
 let mut y = 5;   // widened type (exact rules TBD)
 ```
 
-The exact widening rules interact with the encumbrance configuration. In streamlined mode, widening is aggressive (for convenience). In encumbered mode, widening is conservative (for precision).
+The exact widening rules interact with the active standard's configuration. In low-assurance mode, widening is aggressive (for convenience). In high-assurance mode, widening is conservative (for precision).
 
 ---
 
@@ -438,15 +438,15 @@ Functions that can throw errors may declare their error types using union types:
 fn read_file(path: String) -> String | FileError { ... }
 ```
 
-In encumbered mode, the compiler infers error union types automatically and can optionally require explicit declarations. In streamlined mode, error types are not tracked.
+In high-assurance mode, the compiler infers error union types automatically and can optionally require explicit declarations. In low-assurance mode, error types are not tracked.
 
-Three error mode presets are available: streamlined (throw without declaring), encumbered (must declare and handle errors), and no-throw (all errors via result types). See [docs/spec/agreement.md](agreement.md) and [docs/user-guide/error-handling.md](../user-guide/error-handling.md) for details.
+Error declaration requirements are configurable via the `undeclared_errors` feature in the active standard. See [docs/spec/assurance-ledger.md](assurance-ledger.md) and [docs/user-guide/error-handling.md](../user-guide/error-handling.md) for details.
 
 ---
 
-## Interaction with the Encumbrance Continuum
+## Interaction with Assurance Levels
 
-| Aspect                   | Streamlined                                  | Encumbered                                           |
+| Aspect                   | Low-assurance                                | High-assurance                                       |
 |--------------------------|----------------------------------------------|------------------------------------------------------|
 | Type annotations         | Optional; inferred from usage                | Required where inference is ambiguous                 |
 | Numeric types            | Default to `f64`                             | Exact type required (e.g., `i32`, `u64`)             |
@@ -533,11 +533,11 @@ Open questions for the type system. See also [docs/project/open-questions.md](..
 ### Error Types
 
 - [x] **`Error` type status.** Error objects are structural — created with `new_error()` which produces an object with `message` and `__is_error__` metadata. Not a nominal type. Open question whether this should become a nominal type.
-- [x] **Exception model details.** ish uses thrown exceptions. Functions can declare thrown error types as union types in encumbered mode. The compiler infers error union types automatically. Three mode presets: streamlined, encumbered, no-throw.
+- [x] **Exception model details.** ish uses thrown exceptions. Functions can declare thrown error types as union types in high-assurance mode. The compiler infers error union types automatically. Three mode presets: low-assurance, high-assurance, no-throw.
 
-### Encumbrance Configuration
+### Assurance Level Configuration
 
-- [ ] **Per-variable encumbrance syntax.** The syntax for configuring encumbrance per-variable has not been designed.
+- [ ] **Per-variable assurance level syntax.** The syntax for configuring assurance levels per-variable has not been designed.
 
 ### The `Type` Metatype
 

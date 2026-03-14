@@ -17,9 +17,10 @@ Files are named `<isodate>-<topic>.md` for chronological sorting.
 
 | Date | Topic | File |
 |------|-------|------|
-| 2026-03-10 | Documentation system design | [2026-03-10-documentation-system.md](2026-03-10-documentation-system.md) |
-| 2026-03-11 | Documentation conventions cleanup | [2026-03-11-documentation-conventions-cleanup.md](2026-03-11-documentation-conventions-cleanup.md) |
+| 2026-03-14 | Assurance Ledger design | [2026-03-14-assurance-ledger.md](2026-03-14-assurance-ledger.md) |
 | 2026-03-11 | Error handling implementation | [2026-03-11-error-handling.md](2026-03-11-error-handling.md) |
+| 2026-03-11 | Documentation conventions cleanup | [2026-03-11-documentation-conventions-cleanup.md](2026-03-11-documentation-conventions-cleanup.md) |
+| 2026-03-10 | Documentation system design | [2026-03-10-documentation-system.md](2026-03-10-documentation-system.md) |
 
 ---
 

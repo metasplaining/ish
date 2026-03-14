@@ -9,7 +9,7 @@ depends-on: [docs/spec/types.md]
 
 # Types
 
-ish has a rich type system that adapts to your needs. In streamlined mode, types are inferred automatically. In encumbered mode, you declare types explicitly for stricter checking.
+ish has a rich type system that adapts to your needs. In low-assurance mode, types are inferred automatically. In high-assurance mode, you declare types explicitly for stricter checking.
 
 For the full specification, see [docs/spec/types.md](../spec/types.md).
 
@@ -19,10 +19,10 @@ For the full specification, see [docs/spec/types.md](../spec/types.md).
 
 Numeric types match Rust: `i8`, `i16`, `i32`, `i64`, `i128`, `u8`–`u128`, `usize`, `f32`, `f64`. Plus `bool` and `char`.
 
-In streamlined mode, numbers default to `f64`:
+In low-assurance mode, numbers default to `f64`:
 
 ```
-let x = 42;      // f64 in streamlined mode
+let x = 42;      // f64 in low-assurance mode
 let y = 3.14;    // f64
 ```
 

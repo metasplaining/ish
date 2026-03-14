@@ -22,7 +22,7 @@ Tracks which language features are designed, prototyped, and production-ready.
 | Closures | ✅ | partial | ✅ | partial | ❌ |
 | Module system | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Visibility (pub/priv) | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Encumbrance / agreement | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Assurance Ledger | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Execution configurations | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Reasoning system | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Memory management | partial | partial | ❌ | ❌ | ❌ |

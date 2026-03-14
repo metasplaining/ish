@@ -15,7 +15,7 @@ depends-on: [docs/spec/execution.md]
 
 ## What is ish?
 
-ish is a general-purpose programming language designed to support a wide range of language tradeoffs within a single unified language. Instead of choosing between a dynamically-typed scripting language and a statically-typed compiled language, ish lets you configure where on that spectrum your code sits — from fully streamlined (interpreted, flexible, forgiving) to fully encumbered (compiled, strict, optimized).
+ish is a general-purpose programming language designed to support a wide range of language tradeoffs within a single unified language. Instead of choosing between a dynamically-typed scripting language and a statically-typed compiled language, ish lets you configure where on that spectrum your code sits — from fully low-assurance (interpreted, flexible, forgiving) to fully high-assurance (compiled, strict, optimized).
 
 See [README.md](../../README.md) for the full motivation.
 
@@ -51,7 +51,7 @@ println("Hello, world!");
 - [Language Basics](language-basics.md) — Syntax, expressions, statements
 - [Types](types.md) — The ish type system
 - [Functions](functions.md) — Functions, closures, lambdas
-- [The Encumbrance Continuum](encumbrance.md) — What makes ish different
+- [The Assurance Level Continuum](assurance-levels.md) — What makes ish different
 
 ---
 

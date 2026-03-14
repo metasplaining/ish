@@ -23,7 +23,7 @@ fn add(a, b) {
 }
 ```
 
-With type annotations (optional in streamlined mode, required in encumbered mode):
+With type annotations (optional in low-assurance mode, required in high-assurance mode):
 
 ```
 fn add(a: i32, b: i32) -> i32 {

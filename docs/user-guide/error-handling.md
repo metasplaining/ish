@@ -4,7 +4,7 @@ category: user-guide
 audience: [human-dev]
 status: draft
 last-verified: 2026-03-11
-depends-on: [docs/spec/types.md, docs/spec/agreement.md]
+depends-on: [docs/spec/types.md, docs/spec/assurance-ledger.md]
 ---
 
 # Error Handling
@@ -154,15 +154,15 @@ For block-scoped resource cleanup, use a `with` block instead (see above). If yo
 
 ---
 
-## Error Handling Across the Encumbrance Continuum
+## Error Handling Across Assurance Levels
 
-How error handling is marked varies with the encumbrance level. The `"errors thrown by function"` feature is a configurable marked feature in ish:
+How error handling is configured varies with the assurance level. The `checked_exceptions` feature is a configurable entry in the assurance ledger:
 
-- **Streamlined mode:** Functions can throw without declaring it. Unhandled throws become runtime errors.
-- **Encumbered mode:** Functions must declare the errors they can throw. The compiler verifies that all error paths are handled.
+- **Low-assurance mode:** Functions can throw without declaring it. Unhandled throws become runtime errors.
+- **High-assurance mode:** Functions must declare the errors they can throw. The compiler verifies that all error paths are handled.
 - **No-throw mode:** Throwing is not permitted. All errors must be handled via result types.
 
-See [docs/spec/agreement.md](../spec/agreement.md) for configuration details.
+See [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md) for configuration details.
 
 ---
 

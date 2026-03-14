@@ -4,7 +4,7 @@ category: spec
 audience: [all]
 status: draft
 last-verified: 2026-03-10
-depends-on: [docs/spec/agreement.md, docs/spec/execution.md]
+depends-on: [docs/spec/assurance-ledger.md, docs/spec/execution.md]
 ---
 
 # ish Module System
@@ -80,7 +80,7 @@ The package distribution strategy is expected to evolve as the language grows. T
 
 1. **Git-based source packages.** Distribute ish source packages via git-based dependencies initially — minimal infrastructure, full control.
 2. **OCI/ORAS compiled modules.** Distribute compiled ish modules via OCI/ORAS once the compiled module format stabilizes.
-3. **Dedicated registry.** Build a dedicated ish registry once the packaging semantics (encumbrance, module compatibility, execution configuration) are well-defined enough to encode in registry metadata.
+3. **Dedicated registry.** Build a dedicated ish registry once the packaging semantics (assurance levels, module compatibility, execution configuration) are well-defined enough to encode in registry metadata.
 
 ---
 
@@ -109,7 +109,7 @@ Open questions for the module system. See also [docs/project/open-questions.md](
 
 - [ ] **`use` directive syntax.** Rust-style `use a::b::c;`, Java-style `import a.b.c`, or something else? Glob imports? Selective imports? Renaming?
 - [ ] **Relative vs. absolute paths.** Can `use` directives reference modules with relative paths (e.g., `use super::sibling`)?
-- [ ] **Conditional imports.** Can imports be conditional on encumbrance level or platform?
+- [ ] **Conditional imports.** Can imports be conditional on assurance level or platform?
 
 ### Circular Dependency Enforcement
 
@@ -140,10 +140,10 @@ Open questions for the module system. See also [docs/project/open-questions.md](
 - [ ] **Private/authenticated registries.** Mechanism for hosting private packages?
 - [ ] **Security and verification.** Package authentication? Signature verification? Checksum validation?
 
-### Interaction with Encumbrance
+### Interaction with Assurance Levels
 
-- [ ] **Encumbrance boundaries at module edges.** Can a streamlined module import an encumbered module and vice versa? What checks are performed at the boundary? Is encumbrance metadata recorded in the package encoding?
-- [ ] **Per-module encumbrance configuration.** Can encumbrance level be set per module, or only per project?
+- [ ] **Assurance level boundaries at module edges.** Can a low-assurance module import a high-assurance module and vice versa? What checks are performed at the boundary? Is assurance level metadata recorded in the package encoding?
+- [ ] **Per-module assurance level configuration.** Can assurance level be set per module, or only per project?
 
 ### Interaction with Execution Configurations
 

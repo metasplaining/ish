@@ -18,7 +18,7 @@ Authoritative specification of ish syntax and semantics. These documents use nor
 | [types.md](types.md) | Type system — primitives, literals, objects, unions, generics, inference, narrowing | draft |
 | [modules.md](modules.md) | Module system — files, visibility, imports, packages, distribution | draft |
 | [reasoning.md](reasoning.md) | Reasoning system — propositions, plugins, annotations | draft |
-| [agreement.md](agreement.md) | Agreement and marked features — the encumbrance continuum | draft |
+| [assurance-ledger.md](assurance-ledger.md) | Assurance Ledger — standards, entries, audit, and discrepancies | draft |
 | [execution.md](execution.md) | Execution configurations — thin shell, fat shell, compiler, executable | draft |
 | [memory.md](memory.md) | Memory management — stack, heap, reference counted, garbage collected | draft |
 | [polymorphism.md](polymorphism.md) | Polymorphism strategies — none, enumerated, monomorphized, vtable, associative array | draft |

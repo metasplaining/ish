@@ -15,7 +15,9 @@ Track documentation updates that are owed after code changes. Each entry records
 
 ## Outstanding Debt
 
-*No outstanding documentation debt.*
+- [ ] Feature state table in [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md) is a placeholder — needs human review and completion (2026-03-14)
+- [ ] Custom entry trackability mechanism TBD — [docs/spec/assurance-ledger.md § Open Questions](../spec/assurance-ledger.md#open-questions) (2026-03-14)
+- [ ] Custom entry discrepancy messages TBD — [docs/spec/assurance-ledger.md § Open Questions](../spec/assurance-ledger.md#open-questions) (2026-03-14)
 
 ---
 

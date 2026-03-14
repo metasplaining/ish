@@ -11,7 +11,7 @@ depends-on: [docs/spec/types.md, docs/spec/modules.md]
 
 Patterns that recur in idiomatic ish code. Use these as templates when generating code.
 
-## Builder Pattern (Streamlined)
+## Builder Pattern (Low-Assurance)
 
 ```
 let config = {}
@@ -21,7 +21,7 @@ config.debug = true
 start_server(config)
 ```
 
-## Builder Pattern (Encumbered)
+## Builder Pattern (High-Assurance)
 
 ```
 type ServerConfig = {
@@ -41,11 +41,11 @@ start_server(config)
 ## Optional Values
 
 ```
-// Streamlined
+// Low-assurance
 let name = get_name() // might be nil
 if name { print(name) }
 
-// Encumbered
+// High-assurance
 let name: String? = get_name()
 match name {
     Some(n) -> print(n)

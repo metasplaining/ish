@@ -4,7 +4,7 @@ category: proposal
 audience: [all]
 status: proposal
 last-verified: 2026-03-12
-depends-on: [docs/user-guide/error-handling.md, docs/project/proposals/error-handling.md, docs/spec/agreement.md]
+depends-on: [docs/user-guide/error-handling.md, docs/project/proposals/error-handling.md, docs/spec/assurance-ledger.md]
 ---
 
 # Proposal: Defer Scoping — Function-Scoped vs. Block-Scoped

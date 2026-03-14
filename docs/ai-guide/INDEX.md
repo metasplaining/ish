@@ -16,9 +16,9 @@ Playbooks and reference for AI agents writing ish code. Dense, structured, exhau
 | Document | Topic | Status |
 |----------|-------|--------|
 | [orientation.md](orientation.md) | Project overview — what ish is, how to navigate the project | draft |
-| [playbook-streamlined.md](playbook-streamlined.md) | How to write streamlined ish | draft |
-| [playbook-encumbered.md](playbook-encumbered.md) | How to write encumbered ish | draft |
-| [playbook-mixed.md](playbook-mixed.md) | Working with mixed encumbrance levels | draft |
+| [playbook-low-assurance.md](playbook-low-assurance.md) | How to write low-assurance ish | draft |
+| [playbook-high-assurance.md](playbook-high-assurance.md) | How to write high-assurance ish | draft |
+| [playbook-mixed.md](playbook-mixed.md) | Working with mixed assurance levels | draft |
 | [patterns.md](patterns.md) | Common patterns and idioms | draft |
 | [antipatterns.md](antipatterns.md) | What NOT to do and why | draft |
 

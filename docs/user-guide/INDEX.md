@@ -24,7 +24,7 @@ A guide for human developers learning ish. Starts simple and builds to advanced 
 | [objects.md](objects.md) | Objects, structural and nominal typing | draft |
 | [modules.md](modules.md) | Module system for users | draft |
 | [error-handling.md](error-handling.md) | Errors, exceptions, result types | draft |
-| [encumbrance.md](encumbrance.md) | The encumbrance continuum | draft |
+| [assurance-levels.md](assurance-levels.md) | The assurance level continuum | draft |
 
 ---
 

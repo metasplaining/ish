@@ -13,9 +13,12 @@ Structured proposals generated from prompt files using the `/propose` skill. Eac
 
 ---
 
-| Date | Topic | File |
-|------|-------|------|
-| 2026-03-11 | Error Handling | [error-handling.md](error-handling.md) |
+| Date | Topic | Status | File |
+|------|-------|--------|------|
+| 2026-03-14 | Assurance Ledger — Standards, Entries, and Complete Syntax | accepted | [assurance-ledger-syntax.md](assurance-ledger-syntax.md) |
+| 2026-03-14 | Ledger System — Naming and Complete Syntax | accepted; superseded by assurance-ledger-syntax.md | [ledger-system-syntax.md](ledger-system-syntax.md) |
+| 2026-03-14 | Agreement Metaphor and Syntax | accepted; superseded by assurance-ledger-syntax.md | [agreement-metaphor-and-syntax.md](agreement-metaphor-and-syntax.md) |
+| 2026-03-11 | Error Handling | accepted | [error-handling.md](error-handling.md) |
 
 ---
 

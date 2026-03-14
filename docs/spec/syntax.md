@@ -3,8 +3,8 @@ title: ish Syntax
 category: spec
 audience: [all]
 status: draft
-last-verified: 2026-03-10
-depends-on: [docs/spec/types.md]
+last-verified: 2026-03-14
+depends-on: [docs/spec/types.md, docs/spec/assurance-ledger.md]
 ---
 
 # ish Syntax
@@ -19,6 +19,22 @@ The syntax will be defined once the language semantics are more complete. Key op
 - What is the basic expression and statement syntax?
 
 See [docs/project/open-questions.md](../project/open-questions.md#syntax-and-language-surface) for the full list of syntax open questions.
+
+---
+
+## Assurance Ledger Syntax Constructs
+
+The following syntax constructs have been designed for the assurance ledger system. See [docs/spec/assurance-ledger.md](assurance-ledger.md) for full details.
+
+| Construct | Syntax | Scope |
+|-----------|--------|-------|
+| Apply standard to scope | `@standard[name]` | block, function, module |
+| Inline feature override | `@standard[feature(state)]` | block, function, module |
+| Multi-feature override | `@standard[feat1(state), feat2(state)]` | block, function, module |
+| Apply entry to item | `@[entry(params)]` | variable, property, function, type, statement |
+| Define a standard | `standard name [...]` | module, function, block |
+| Extend a standard | `standard name extends base [...]` | module, function, block |
+| Define an entry type | `entry type name { ... }` | module level |
 
 ---
 

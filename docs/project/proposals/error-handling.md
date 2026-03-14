@@ -4,7 +4,7 @@ category: proposal
 audience: [all]
 status: proposal
 last-verified: 2026-03-11
-depends-on: [docs/spec/agreement.md, docs/spec/types.md, docs/spec/execution.md, docs/spec/reasoning.md, docs/user-guide/error-handling.md]
+depends-on: [docs/spec/assurance-ledger.md, docs/spec/types.md, docs/spec/execution.md, docs/spec/reasoning.md, docs/user-guide/error-handling.md]
 ---
 
 # Proposal: Error Handling
@@ -340,7 +340,7 @@ The prompt's design (throw = return, configurable return handler) naturally lead
 - `proto/ish-ast/src/lib.rs` — `?` operator AST node
 - `proto/ish-vm/src/interpreter.rs` — `?` operator execution
 - `docs/spec/types.md` — error union type documentation
-- `docs/spec/agreement.md` — "errors thrown by function" marking specification
+- `docs/spec/assurance-ledger.md` — "errors thrown by function" entry specification
 
 ### Decisions
 
@@ -415,7 +415,7 @@ Or at the project level in a config file.
 - `proto/ish-ast/src/lib.rs` — context parameters in function signatures
 - `proto/ish-vm/src/interpreter.rs` — handler invocation on call/return
 - `docs/spec/execution.md` — handler mechanism specification
-- `docs/spec/agreement.md` — error mode as configurable feature
+- `docs/spec/assurance-ledger.md` — error mode as configurable feature
 
 ### Decisions
 
@@ -425,7 +425,7 @@ Or at the project level in a config file.
 **Decision:** At what granularity can error mode be configured (project / module / function)?
 --> All of the above. Encumberance configuration is still TBD, but it will be something in the category of annotations configurably at the project / module / function level
 
-**Decision:** Should the handler mechanism be specified as part of the agreement system or as a separate execution concern?
+**Decision:** Should the handler mechanism be specified as part of the assurance ledger or as a separate execution concern?
 --> As a separate execution concern. It is TBD whether the handler mechanism is an implementation detail or is exposed as part of the public interface.  But we should keep it as a hidden implementation detail until forced to do otherwise.
 
 ---
@@ -509,7 +509,7 @@ The following documentation files will be affected by this proposal:
 
 - [docs/user-guide/error-handling.md](../../user-guide/error-handling.md) — **complete rewrite** needed; currently contradicts the proposed throw/catch model
 - [docs/spec/types.md](../../spec/types.md) — Error type specification, union types for error results
-- [docs/spec/agreement.md](../../spec/agreement.md) — "errors thrown by function" marking, error mode presets
+- [docs/spec/assurance-ledger.md](../../spec/assurance-ledger.md) — checked exceptions entry, error mode presets
 - [docs/spec/execution.md](../../spec/execution.md) — handler mechanism (return handler, stackframe pusher/popper)
 - [docs/spec/syntax.md](../../spec/syntax.md) — syntax for throw/try/catch/finally/with/defer/context parameters
 - [docs/spec/reasoning.md](../../spec/reasoning.md) — `might_throw` proposition, interaction with error types

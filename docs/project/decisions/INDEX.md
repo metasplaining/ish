@@ -16,6 +16,7 @@ Each ADR records a design decision, its rationale, and what was considered and r
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [001](001-documentation-structure.md) | Documentation Structure | accepted | 2026-03-10 |
+| [002](002-assurance-ledger.md) | Assurance Ledger | accepted | 2026-03-14 |
 
 ---
 

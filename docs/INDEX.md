@@ -33,7 +33,7 @@ The authoritative specification of ish syntax and semantics.
 | [spec/types.md](spec/types.md) | Type system |
 | [spec/modules.md](spec/modules.md) | Module system |
 | [spec/reasoning.md](spec/reasoning.md) | Reasoning system |
-| [spec/agreement.md](spec/agreement.md) | Agreement and marked features |
+| [spec/assurance-ledger.md](spec/assurance-ledger.md) | Assurance Ledger — standards, entries, audit, and discrepancies |
 | [spec/execution.md](spec/execution.md) | Execution configurations |
 | [spec/memory.md](spec/memory.md) | Memory management |
 | [spec/polymorphism.md](spec/polymorphism.md) | Polymorphism strategies |

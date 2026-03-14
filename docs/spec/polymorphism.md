@@ -4,7 +4,7 @@ category: spec
 audience: [all]
 status: draft
 last-verified: 2026-03-10
-depends-on: [docs/spec/agreement.md, docs/spec/types.md]
+depends-on: [docs/spec/assurance-ledger.md, docs/spec/types.md]
 ---
 
 # ish Polymorphism Strategies
@@ -19,7 +19,7 @@ Existing languages implement polymorphism in several ways. Ordered roughly from 
 | Virtual method table  | Code is written against interfaces. The build tool attaches metadata to data records, enabling functions to interpret the data at runtime.        |
 | Associative array     | Each record is stored as a hash table, allowing an arbitrary set of properties per object at runtime.                                            |
 
-ish supports all of these strategies. In general, the implementation detail is hidden from the developer. The ish language processor chooses the highest-performing strategy for which all constraints are met. For example, interpreted ish always uses associative arrays because there is no build step at which to choose a more constrained option. The build can be encumbered to fail with a descriptive error message if the constraints for a particular strategy are not met.
+ish supports all of these strategies. In general, the implementation detail is hidden from the developer. The ish language processor chooses the highest-performing strategy for which all constraints are met. For example, interpreted ish always uses associative arrays because there is no build step at which to choose a more constrained option. The active standard can require a specific strategy and produce a discrepancy if the constraints for that strategy are not met.
 
 ---
 

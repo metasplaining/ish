@@ -4,7 +4,7 @@ category: project
 audience: [all]
 status: draft
 last-verified: 2026-03-11
-depends-on: [docs/spec/types.md, docs/spec/modules.md, docs/spec/reasoning.md, docs/spec/agreement.md, docs/spec/execution.md, docs/spec/memory.md, docs/spec/polymorphism.md]
+depends-on: [docs/spec/types.md, docs/spec/modules.md, docs/spec/reasoning.md, docs/spec/assurance-ledger.md, docs/spec/execution.md, docs/spec/memory.md, docs/spec/polymorphism.md]
 ---
 
 # ish Open Questions
@@ -75,9 +75,9 @@ See also [docs/spec/types.md — Open Questions](../spec/types.md#open-questions
 - [ ] **`Error` type status.** First-class or standard library type?
 - [ ] **Exception model details.** Typed exceptions? Function signature declarations?
 
-### Encumbrance Configuration
+### Assurance Level Configuration
 
-- [ ] **Per-variable encumbrance syntax.** Not designed.
+- [ ] **Per-variable assurance level syntax.** Not designed.
 
 ### The `Type` Metatype
 
@@ -118,7 +118,7 @@ See also [docs/spec/modules.md — Open Questions](../spec/modules.md#open-quest
 
 - [ ] **`use` directive syntax.** Style, glob imports, selective imports, renaming.
 - [ ] **Relative vs. absolute paths.** Relative path support?
-- [ ] **Conditional imports.** Conditional on encumbrance or platform?
+- [ ] **Conditional imports.** Conditional on assurance level or platform?
 
 ### Circular Dependency Enforcement
 
@@ -149,10 +149,10 @@ See also [docs/spec/modules.md — Open Questions](../spec/modules.md#open-quest
 - [ ] **Private/authenticated registries.** Private package hosting?
 - [ ] **Security and verification.** Authentication? Signatures? Checksums?
 
-### Encumbrance Interaction
+### Assurance Level Interaction
 
-- [ ] **Encumbrance boundaries at module edges.** Cross-boundary checks? Metadata in package encoding?
-- [ ] **Per-module encumbrance configuration.** Per module or per project?
+- [ ] **Assurance level boundaries at module edges.** Cross-boundary checks? Metadata in package encoding?
+- [ ] **Per-module assurance level configuration.** Per module or per project?
 
 ### Execution Configuration Interaction
 
@@ -172,8 +172,8 @@ See also [docs/spec/reasoning.md — Open Questions](../spec/reasoning.md#open-q
 
 - [ ] **Plugin interface.** AST node type? State parameter? Cross-proposition access? Statefulness?
 - [ ] **Annotation syntax.** Attribute/decorator/inline? Valid locations? Assertion vs. query distinction?
-- [ ] **Encumbrance interaction.** Behavior in streamlined mode? Independent configurability?
-- [ ] **Agreement system relationship.** Agreements as propositions? Pre/post-conditions?
+- [ ] **Assurance level interaction.** Behavior in low-assurance mode? Independent configurability?
+- [ ] **Assurance ledger relationship.** Standards as propositions? Pre/post-conditions?
 - [ ] **Compound proposition semantics.** Implication? Quantification? Variable references?
 - [ ] **Error reporting.** Message format? Custom messages? Failure explanations?
 - [ ] **Plugin registration.** Declarative or imperative? Scope? Naming conflicts? Third-party plugins?
@@ -187,13 +187,13 @@ See also [docs/spec/reasoning.md — Open Questions](../spec/reasoning.md#open-q
 
 ---
 
-## Agreement System
+## Assurance Ledger
 
-See also [docs/spec/agreement.md — Open Questions](../spec/agreement.md#open-questions).
+See also [docs/spec/assurance-ledger.md — Open Questions](../spec/assurance-ledger.md#open-questions).
 
-- [ ] **What happens when an agreement is violated at build time vs. runtime?**
-- [ ] **Syntax for marking/unmarking features** at project, file, function, or variable level.
-- [ ] **Agreement interaction with boundaries** between differently-encumbered code.
+- [x] **~~What happens when an agreement is violated at build time vs. runtime?~~** Resolved — audit states (optional/live/pre) determine when and how discrepancies are reported. See [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md).
+- [x] **~~Syntax for marking/unmarking features at project, file, function, or variable level.~~** Resolved — `@standard[name]` applies standards to scopes; `@[entry(params)]` annotates individual items. See [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md).
+- [x] **~~Agreement interaction with boundaries between differently-encumbered code.~~** Resolved — cross-scope standard interactions define boundary rules. See [docs/spec/assurance-ledger.md § Cross-Scope Standard Interactions](../spec/assurance-ledger.md#cross-scope-standard-interactions).
 
 ---
 
@@ -204,7 +204,7 @@ See also [docs/spec/execution.md — Open Questions](../spec/execution.md#open-q
 ### Thin Shell
 
 - [ ] **Footprint metrics.** Actual disk and memory footprint.
-- [ ] **Relationship to streamlined ish.** Can encumbered code be used from the thin shell?
+- [ ] **Relationship to low-assurance ish.** Can high-assurance code be used from the thin shell?
 
 ### Fat Shell
 
@@ -224,9 +224,9 @@ See also [docs/spec/execution.md — Open Questions](../spec/execution.md#open-q
 - [ ] **Runtime requirements.** Dependencies?
 - [ ] **Cross-compilation.** Cross-platform executables?
 
-### Encumbrance Relationship
+### Assurance Level Relationship
 
-- [ ] **Configuration selection vs. encumbrance level.** Minimum encumbrance for executables? Mixed encumbrance?
+- [ ] **Configuration selection vs. assurance level.** Minimum assurance level for executables? Mixed assurance levels?
 
 ### Transitions
 
@@ -263,7 +263,7 @@ See also [docs/spec/polymorphism.md — Open Questions](../spec/polymorphism.md#
 
 ## Build System and Tooling
 
-- [ ] **Build process.** Build command? Output format? Mixed-encumbrance builds?
+- [ ] **Build process.** Build command? Output format? Mixed-assurance builds?
 - [ ] **Debugging support.** Source maps? Debugger integration? REPL beyond the shell?
 - [ ] **Testing support.** Built-in test framework? Test runner?
 - [ ] **IDE/editor support.** LSP? Syntax highlighting?
@@ -286,7 +286,7 @@ See also [docs/spec/polymorphism.md — Open Questions](../spec/polymorphism.md#
 - [ ] **Null/undefined handling.** Option types interaction?
 - [ ] **Operator semantics.** Arithmetic, comparison, logical, bitwise — behavior across types?
 - [ ] **String model.** UTF-8? UTF-16? Internal representation?
-- [ ] **Numeric model.** Fixed-width? Arbitrary precision? Variation with encumbrance?
+- [ ] **Numeric model.** Fixed-width? Arbitrary precision? Variation with assurance level?
 
 ---
 
@@ -303,7 +303,7 @@ See also [docs/spec/polymorphism.md — Open Questions](../spec/polymorphism.md#
 - [docs/spec/types.md](../spec/types.md)
 - [docs/spec/modules.md](../spec/modules.md)
 - [docs/spec/reasoning.md](../spec/reasoning.md)
-- [docs/spec/agreement.md](../spec/agreement.md)
+- [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md)
 - [docs/spec/execution.md](../spec/execution.md)
 - [docs/spec/memory.md](../spec/memory.md)
 - [docs/spec/polymorphism.md](../spec/polymorphism.md)

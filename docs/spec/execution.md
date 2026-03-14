@@ -4,7 +4,7 @@ category: spec
 audience: [all]
 status: draft
 last-verified: 2026-03-11
-depends-on: [docs/spec/modules.md, docs/spec/agreement.md]
+depends-on: [docs/spec/modules.md, docs/spec/assurance-ledger.md]
 ---
 
 # ish Execution Configurations
@@ -20,7 +20,7 @@ When ish is started without any configuration or arguments, it runs as a **thin 
 - Accepts command-line input, interprets it, and processes it immediately.
 - The shell, parser, virtual machine, and module loader are all loaded, but these are small, leaving ish with a minimal disk and memory footprint.
 - Function declaration is supported, but lightweight — no code analysis or generation is performed. No semantic checking is done when functions are declared.
-- This is the entry point for streamlined ish (see [agreement.md](agreement.md)).
+- This is the entry point for low-assurance ish (see [assurance-ledger.md](assurance-ledger.md)).
 
 ## 2. Fat Shell
 
@@ -38,7 +38,7 @@ Some of the modules that can be loaded are the **code analyzer** and the **compi
 2. **Packages** — saved for later import in a different process.
 3. **Executables** — saved as standalone programs.
 
-This is the configuration used to build encumbered ish (see [agreement.md](agreement.md)).
+This is the configuration used to build high-assurance ish (see [assurance-ledger.md](assurance-ledger.md)).
 
 ## 4. Executable
 
@@ -59,7 +59,7 @@ Open questions for execution configurations. See also [docs/project/open-questio
 ### Thin Shell
 
 - [ ] **Footprint metrics.** What is the actual disk and memory footprint? Measure once the prototype is mature.
-- [ ] **Relationship to streamlined ish.** Can encumbered code be used from the thin shell? Or is the thin shell strictly streamlined?
+- [ ] **Relationship to low-assurance ish.** Can high-assurance code be used from the thin shell? Or is the thin shell strictly low-assurance?
 
 ### Fat Shell — Module System
 
@@ -79,9 +79,9 @@ Open questions for execution configurations. See also [docs/project/open-questio
 - [ ] **Runtime requirements.** Runtime dependencies (runtime library, libc, allocator)?
 - [ ] **Cross-compilation.** Can ish produce executables for platforms other than the host?
 
-### Relationship to Encumbrance
+### Relationship to Assurance Levels
 
-- [ ] **Configuration selection vs. encumbrance level.** Does selecting "executable" imply a minimum encumbrance level? Can a compiled module be imported into a streamlined thin shell? What happens with mixed encumbrance levels?
+- [ ] **Configuration selection vs. assurance level.** Does selecting "executable" imply a minimum assurance level? Can a compiled module be imported into a low-assurance thin shell? What happens with mixed assurance levels?
 
 ### Transitions Between Configurations
 
