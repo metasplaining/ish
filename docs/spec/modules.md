@@ -3,8 +3,8 @@ title: ish Module System
 category: spec
 audience: [all]
 status: draft
-last-verified: 2026-03-10
-depends-on: [docs/spec/assurance-ledger.md, docs/spec/execution.md]
+last-verified: 2026-03-14
+depends-on: [docs/spec/assurance-ledger.md, docs/spec/execution.md, docs/spec/syntax.md]
 ---
 
 # ish Module System
@@ -41,9 +41,25 @@ By default, all symbols are visible only within their own module. Visibility dir
 | `pub(project)` | Visible to all modules within the same project.                |
 | `pub(global)`  | Visible to all code, including external consumers.             |
 
+Bare `pub` means `pub(global)`. The default visibility is configurable via a standard.
+
+```ish
+fn internal_helper() { ... }         // pub(self) — default
+pub fn exported() { ... }            // pub(global)
+pub(super) fn parent_only() { ... }  // visible to parent module
+pub(project) fn project_wide() { ... } // visible within the project
+```
+
 ## Imports and Re-exports
 
-A `use` directive is required to reference symbols from a different module. Combining `pub` and `use` directives allows symbols to be re-exported.
+A `use` directive is required to reference symbols from a different module:
+
+```ish
+use std::io
+use mylib::utils
+```
+
+Combining `pub` and `use` directives allows symbols to be re-exported.
 
 ---
 

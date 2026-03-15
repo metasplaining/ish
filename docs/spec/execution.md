@@ -3,8 +3,8 @@ title: ish Execution Configurations
 category: spec
 audience: [all]
 status: draft
-last-verified: 2026-03-11
-depends-on: [docs/spec/modules.md, docs/spec/assurance-ledger.md]
+last-verified: 2026-03-14
+depends-on: [docs/spec/modules.md, docs/spec/assurance-ledger.md, docs/spec/syntax.md]
 ---
 
 # ish Execution Configurations
@@ -19,12 +19,13 @@ When ish is started without any configuration or arguments, it runs as a **thin 
 
 - Accepts command-line input, interprets it, and processes it immediately.
 - The shell, parser, virtual machine, and module loader are all loaded, but these are small, leaving ish with a minimal disk and memory footprint.
+- In shell mode, bare-word lines are parsed as command invocations; lines starting with recognized keywords (`let`, `fn`, `if`, etc.) are parsed as language statements. See [docs/spec/syntax.md § Shell Mode](syntax.md#shell-mode) for the full shell syntax.
 - Function declaration is supported, but lightweight — no code analysis or generation is performed. No semantic checking is done when functions are declared.
 - This is the entry point for low-assurance ish (see [assurance-ledger.md](assurance-ledger.md)).
 
 ## 2. Fat Shell
 
-When `import` statements are invoked from the thin shell, ish downloads modules and loads them into memory.
+When `use` statements are invoked from the thin shell, ish downloads modules and loads them into memory.
 
 - Imported modules increase ish's memory footprint.
 - Because modules have been optimized and compiled during the module generation process, once loaded they execute very quickly.

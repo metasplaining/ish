@@ -230,7 +230,7 @@ mod tests {
         // result = sum(map(range(4), double))  => sum([0,2,4,6]) = 12
         let prog = Program::new(vec![
             Statement::var_decl("double", Expression::lambda(
-                vec![Parameter { name: "x".into(), type_annotation: None }],
+                vec![Parameter { name: "x".into(), type_annotation: None, default_value: None }],
                 Statement::Block {
                     statements: vec![
                         Statement::Return { value: Some(Expression::binary(BinaryOperator::Mul, Expression::ident("x"), Expression::int(2))) },

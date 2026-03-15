@@ -2,14 +2,12 @@
 title: Getting Started with ish
 category: user-guide
 audience: [human-dev]
-status: placeholder
-last-verified: 2026-03-10
-depends-on: [docs/spec/execution.md]
+status: draft
+last-verified: 2026-03-14
+depends-on: [docs/spec/execution.md, docs/spec/syntax.md]
 ---
 
 # Getting Started with ish
-
-> **Note:** ish is in early development. There is no parser yet — the prototype constructs programs as ASTs in Rust. This guide describes the *intended* developer experience. Runnable examples will be added once the parser is implemented.
 
 ---
 
@@ -38,10 +36,10 @@ cargo test --workspace     # Runs all 45 tests
 
 ---
 
-## Hello World (Intended Syntax)
+## Hello World
 
-```
-println("Hello, world!");
+```ish
+println("Hello, world!")
 ```
 
 ---

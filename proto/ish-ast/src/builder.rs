@@ -52,6 +52,8 @@ impl ProgramBuilder {
             params,
             return_type: None,
             body: Box::new(block),
+            visibility: None,
+            type_params: vec![],
         })
     }
 
@@ -172,6 +174,8 @@ impl BlockBuilder {
             params,
             return_type: None,
             body: Box::new(block),
+            visibility: None,
+            type_params: vec![],
         })
     }
 

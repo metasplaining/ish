@@ -2,59 +2,79 @@
 title: Language Basics
 category: user-guide
 audience: [human-dev]
-status: placeholder
-last-verified: 2026-03-10
+status: draft
+last-verified: 2026-03-14
 depends-on: [docs/spec/syntax.md, docs/spec/types.md]
 ---
 
 # Language Basics
 
-> **Note:** ish syntax has not been finalized. Examples below reflect the design intent.
+ish is a C-family language with braces, `fn` for functions, and `let` for variables. Statements are newline-terminated; semicolons are optional.
 
 ---
 
 ## Variables
 
-```
-let x = 5;           // immutable
-let mut y = 10;      // mutable
-y = 20;              // OK — y is mutable
-// x = 10;           // ERROR — x is immutable
+```ish
+let x = 5           // immutable
+let mut y = 10      // mutable
+y = 20              // OK — y is mutable
+// x = 10           // ERROR — x is immutable
+
+// Type annotation
+let z: i32 = 42
 ```
 
 ## Expressions
 
 Standard arithmetic, comparison, and logical operators:
 
-```
-let sum = a + b;
-let bigger = x > y;
-let both = a and b;
+```ish
+let sum = a + b
+let bigger = x > y
+let both = a and b
+let either = a or b
+let negated = not a
 ```
 
 ## Control Flow
 
-```
-if (condition) {
+Parentheses around conditions are not used:
+
+```ish
+if condition {
     // ...
 } else {
     // ...
 }
 
-while (condition) {
+while condition {
     // ...
 }
+
+for item in collection {
+    println(item)
+}
+```
+
+## Comments
+
+```ish
+// Line comment
+# Shell-style line comment
+
+/* Block comment */
 ```
 
 ## Functions
 
-```
+```ish
 fn greet(name) {
-    println("Hello, " + name + "!");
+    println("Hello, " + name + "!")
 }
 
-fn add(a, b) {
-    return a + b;
+fn add(a: i32, b: i32) -> i32 {
+    return a + b
 }
 ```
 

@@ -3,8 +3,8 @@ title: ish Type System
 category: spec
 audience: [all]
 status: draft
-last-verified: 2026-03-11
-depends-on: [docs/spec/assurance-ledger.md, docs/spec/polymorphism.md, docs/spec/memory.md]
+last-verified: 2026-03-14
+depends-on: [docs/spec/assurance-ledger.md, docs/spec/polymorphism.md, docs/spec/memory.md, docs/spec/syntax.md]
 ---
 
 # ish Type System
@@ -62,19 +62,19 @@ In low-assurance mode, numeric literals without annotations default to `f64` (ma
 
 Any concrete value can serve as a type. A literal type contains exactly one value. Literal types are supported for all value kinds — numeric, string, boolean, object, and list.
 
-```
-let x = 5;            // x has type: 5
-let y = "hello";      // y has type: "hello"
-let z = true;         // z has type: true
-let p = { a: 1 };     // p has type: { a: 1 }
-let ns = [1, 2, 3];   // ns has type: [1, 2, 3]
+```ish
+let x = 5            // x has type: 5
+let y = "hello"      // y has type: "hello"
+let z = true         // z has type: true
+let p = { a: 1 }     // p has type: { a: 1 }
+let ns = [1, 2, 3]   // ns has type: [1, 2, 3]
 ```
 
 Literal types are the most specific types possible. They enable the code analyzer to reason precisely about code paths:
 
-```
-let x = 5;
-if (x < 3) {
+```ish
+let x = 5
+if x < 3 {
     // The code analyzer determines this branch is unreachable,
     // since the only possible value of x is 5, and 5 < 3 is false.
 }
@@ -82,17 +82,17 @@ if (x < 3) {
 
 The code analyzer tracks arithmetic and other operations through literal types. When an expression can be fully evaluated at compile time, the analyzer does so, preserving literal type precision:
 
-```
-let x = 5;
-let y = x + 1;   // y has type: 6 (computed at compile time)
-let z = x * 2;   // z has type: 10
+```ish
+let x = 5
+let y = x + 1   // y has type: 6 (computed at compile time)
+let z = x * 2   // z has type: 10
 ```
 
 **String literal types** are supported:
 
-```
-type Direction = "north" | "south" | "east" | "west";
-let d: Direction = "north";
+```ish
+type Direction = "north" | "south" | "east" | "west"
+let d: Direction = "north"
 ```
 
 ### Special Types
@@ -121,9 +121,9 @@ ish has four built-in special types representing different kinds of "nothing":
 
 Tuples are fixed-length sequences where each element has its own type:
 
-```
-let point: (f64, f64) = (3.0, 4.0);
-let record: (String, i32, bool) = ("Alice", 30, true);
+```ish
+let point: (f64, f64) = (3.0, 4.0)
+let record: (String, i32, bool) = ("Alice", 30, true)
 ```
 
 Tuples are distinct from `List` (homogeneous, variable-length) and `Object` (named properties).
@@ -132,11 +132,11 @@ Tuples are distinct from `List` (homogeneous, variable-length) and `Object` (nam
 
 Objects are the primary structured data type in ish. An object type is defined by its set of named, typed properties.
 
-```
+```ish
 let person = {
     name: "Alice",
     age: 30,
-};
+}
 // person has type: { name: "Alice", age: 30 }
 ```
 
@@ -148,16 +148,9 @@ By default, types are **structural**: two object types are compatible if they ha
 
 Types can be explicitly declared as **nominal**, in which case compatibility requires that the types be declared as related, not merely that they have the same shape:
 
-```
-nominal type UserId = i64;
-nominal type ProductId = i64;
+Nominal typing is handled through entries/annotations in the assurance ledger rather than a `nominal type` keyword. See [docs/spec/assurance-ledger.md](assurance-ledger.md) for details on how to annotate types as nominal.
 
-let uid: UserId = UserId(42);
-let pid: ProductId = ProductId(42);
-// uid and pid are NOT interchangeable, even though both wrap i64
-```
-
-The structural/nominal choice does not vary with assurance level. A type is structural unless explicitly declared nominal.
+The structural/nominal choice does not vary with assurance level. A type is structural unless explicitly annotated as nominal.
 
 #### Open and Closed Object Types
 
@@ -174,11 +167,11 @@ Open objects arise naturally when deserializing data (e.g., from JSON). Once val
 
 Object properties can be declared optional. An optional property may be absent from the object entirely:
 
-```
+```ish
 type Person = {
     name: String,
     age?: i32,      // optional — may be present or absent
-};
+}
 ```
 
 An optional property is typed as `T | null` — when absent, accessing it yields `null`.
@@ -191,8 +184,8 @@ Individual object properties can be marked as mutable or immutable. Depending on
 
 An object type can declare a catch-all type for arbitrary string keys:
 
-```
-type StringMap = { [key: String]: i32 };
+```ish
+type StringMap = { [key: String]: i32 }
 ```
 
 #### Methods and `self`
@@ -203,11 +196,11 @@ Object types can include function-typed properties (methods). Methods have acces
 
 Object types can reference themselves, enabling recursive data structures:
 
-```
+```ish
 type TreeNode = {
     value: i32,
     children: List<TreeNode>,
-};
+}
 ```
 
 ---
@@ -218,18 +211,18 @@ type TreeNode = {
 
 A union type represents a value that could be one of several types. Written with `|`:
 
-```
-let value: i32 | String = getValue();
+```ish
+let value: i32 | String = getValue()
 ```
 
 Union types arise naturally through control flow:
 
-```
-let x;
-if (condition) {
-    x = 5;
+```ish
+let x
+if condition {
+    x = 5
 } else {
-    x = "hello";
+    x = "hello"
 }
 // x has type: 5 | "hello"
 ```
@@ -240,26 +233,26 @@ if (condition) {
 
 An intersection type represents a value that satisfies all of several types simultaneously. Written with `&`:
 
-```
-type Named = { name: String };
-type Aged = { age: i32 };
-type Person = Named & Aged;
+```ish
+type Named = { name: String }
+type Aged = { age: i32 }
+type Person = Named & Aged
 // Person is: { name: String, age: i32 }
 ```
 
 The intersection of incompatible types produces `never`:
 
-```
-type Impossible = i32 & String;  // Impossible is: never
+```ish
+type Impossible = i32 & String  // Impossible is: never
 ```
 
 ### Optional Types
 
 A type suffixed with `?` is shorthand for a union with `null`:
 
-```
-let x: i32? = maybeGetNumber();
-// Equivalent to: let x: i32 | null = maybeGetNumber();
+```ish
+let x: i32? = maybeGetNumber()
+// Equivalent to: let x: i32 | null = maybeGetNumber()
 ```
 
 ---
@@ -270,9 +263,9 @@ let x: i32? = maybeGetNumber();
 
 In low-assurance mode, types are inferred from usage. Developers are not required to write type annotations. The code analyzer tracks the set of possible values for each variable at each point in the program.
 
-```
-let x = 5;         // inferred type: 5
-let y = x + 1;     // inferred type: 6 (evaluated at compile time)
+```ish
+let x = 5         // inferred type: 5
+let y = x + 1     // inferred type: 6 (evaluated at compile time)
 ```
 
 In high-assurance mode, the code analyzer may require explicit type annotations where inference is ambiguous.
@@ -281,10 +274,10 @@ In high-assurance mode, the code analyzer may require explicit type annotations 
 
 Control flow narrows the type of a variable within a branch:
 
-```
-let x: i32 | String = getValue();
+```ish
+let x: i32 | String = getValue()
 
-if (isType(String, x)) {
+if isType(String, x) {
     // Here, x has type: String
 } else {
     // Here, x has type: i32
@@ -299,9 +292,9 @@ Type narrowing applies to any conditional check that provides type information, 
 
 Variables are declared as either mutable or immutable:
 
-```
-let x = 5;         // immutable
-let mut y = 5;     // mutable
+```ish
+let x = 5         // immutable
+let mut y = 5     // mutable
 ```
 
 Mutability affects type widening: mutable variables are more likely to have their literal types widened to broader types.
@@ -312,9 +305,9 @@ Mutability affects type widening: mutable variables are more likely to have thei
 
 Literal types are precise but often impractical for mutable variables. **Type widening** is the process by which the code analyzer generalizes a literal type to a broader type.
 
-```
-let x = 5;       // literal type: 5 (immutable — no widening needed)
-let mut y = 5;   // widened type (exact rules TBD)
+```ish
+let x = 5       // literal type: 5 (immutable — no widening needed)
+let mut y = 5   // widened type (exact rules TBD)
 ```
 
 The exact widening rules interact with the active standard's configuration. In low-assurance mode, widening is aggressive (for convenience). In high-assurance mode, widening is conservative (for precision).
@@ -325,14 +318,14 @@ The exact widening rules interact with the active standard's configuration. In l
 
 Developers can name types for reuse and readability:
 
-```
-type Age = i32;
-type Name = String;
-type Person = { name: Name, age: Age };
-type Result = Person | Error;
+```ish
+type Age = i32
+type Name = String
+type Person = { name: Name, age: Age }
+type Result = Person | Error
 ```
 
-Structural type aliases introduce a name but do not create a distinct type. To create a distinct type, use `nominal type` (see [Structural and Nominal Typing](#structural-and-nominal-typing)).
+Structural type aliases introduce a name but do not create a distinct type. To create a distinct type, annotate it as nominal via the assurance ledger (see [Structural and Nominal Typing](#structural-and-nominal-typing)).
 
 ---
 
@@ -340,43 +333,43 @@ Structural type aliases introduce a name but do not create a distinct type. To c
 
 Types can be parameterized:
 
-```
-type Pair<A, B> = { first: A, second: B };
-let p: Pair<i32, String> = { first: 1, second: "hello" };
+```ish
+type Pair<A, B> = { first: A, second: B }
+let p: Pair<i32, String> = { first: 1, second: "hello" }
 ```
 
 The first-class complex types are generic:
 
-```
-let names: List<String> = ["Alice", "Bob"];
-let scores: Map<String, i32> = { "Alice": 95, "Bob": 87 };
+```ish
+let names: List<String> = ["Alice", "Bob"]
+let scores: Map<String, i32> = { "Alice": 95, "Bob": 87 }
 ```
 
 ### Type Parameter Constraints
 
-```
-type Sortable<T: Comparable> = List<T>;
+```ish
+type Sortable<T: Comparable> = List<T>
 ```
 
 ### Type Parameter Defaults
 
-```
-type Result<T, E = Error> = { value: T } | { error: E };
+```ish
+type Result<T, E = Error> = { value: T } | { error: E }
 ```
 
 ### Type Parameter Inference
 
-```
+```ish
 fn first<T>(list: List<T>) -> T { ... }
-let x = first([1, 2, 3]);   // T is inferred as i32
+let x = first([1, 2, 3])   // T is inferred as i32
 ```
 
 ### Higher-Kinded Types
 
-```
+```ish
 type Functor<F<_>> = {
-    map: <A, B>(fa: F<A>, f: (A) -> B) -> F<B>,
-};
+    map: fn<A, B>(F<A>, fn(A) -> B) -> F<B>,
+}
 ```
 
 ---
@@ -391,9 +384,9 @@ Functions are first-class values in ish. Closures are supported and capture vari
 
 Types themselves are representable as values via the `Type` metatype:
 
-```
-let t: Type = i32;
-let u: Type = List<String>;
+```ish
+let t: Type = i32
+let u: Type = List<String>
 ```
 
 `Type` is what makes `isType(t, i)` and `validate(t, i)` possible — their first argument is a value of type `Type`. It also enables generic types to retain full type information at runtime rather than being erased.
@@ -406,9 +399,9 @@ let u: Type = List<String>;
 
 Returns `true` if instance `i` is of type `t`.
 
-```
-let x: i32 | String = getValue();
-if (isType(i32, x)) {
+```ish
+let x: i32 | String = getValue()
+if isType(i32, x) {
     // x is narrowed to i32
 }
 ```
@@ -417,9 +410,9 @@ if (isType(i32, x)) {
 
 Returns `i` cast as type `t` if valid. Throws an exception otherwise.
 
-```
-let raw = parseJson(input);
-let person = validate(Person, raw);
+```ish
+let raw = parseJson(input)
+let person = validate(Person, raw)
 ```
 
 ### Custom Type Guards
@@ -434,7 +427,7 @@ ish uses thrown exceptions for error handling. There is a built-in `Error` type 
 
 Functions that can throw errors may declare their error types using union types:
 
-```
+```ish
 fn read_file(path: String) -> String | FileError { ... }
 ```
 
@@ -515,7 +508,7 @@ Open questions for the type system. See also [docs/project/open-questions.md](..
 
 ### Function Types
 
-- [ ] **Function type syntax.** The syntax for writing function types (e.g., `(i32, String) -> bool`) has not been decided.
+- [x] **~~Function type syntax.~~** Resolved — function types use `fn(Args) -> Ret` syntax. See [docs/spec/syntax.md](syntax.md).
 - [ ] **Generic function types.** How do type parameters work in function type signatures?
 - [ ] **Overloaded function types.** Can a function have multiple type signatures?
 

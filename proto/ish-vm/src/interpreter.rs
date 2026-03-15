@@ -360,6 +360,41 @@ impl IshVm {
                 self.register_defer(*body.clone(), env.clone());
                 Ok(ControlFlow::None)
             }
+
+            Statement::TypeAlias { .. } => {
+                // Type aliases are checked at analysis time, not runtime
+                Ok(ControlFlow::None)
+            }
+
+            Statement::Use { .. } => {
+                // Module imports are resolved at load time, not runtime
+                Ok(ControlFlow::None)
+            }
+
+            Statement::ModDecl { .. } => {
+                // Module declarations are structural, not runtime
+                Ok(ControlFlow::None)
+            }
+
+            Statement::ShellCommand { .. } => {
+                // Shell command execution is not supported in the tree-walking interpreter
+                Err(RuntimeError::new("Shell commands are not supported in this execution mode"))
+            }
+
+            Statement::Annotated { inner, .. } => {
+                // Execute the inner statement; annotations are metadata
+                self.exec_statement(inner, env)
+            }
+
+            Statement::StandardDef { .. } | Statement::EntryTypeDef { .. } => {
+                // Standard and entry type definitions are declarative metadata
+                Ok(ControlFlow::None)
+            }
+
+            Statement::Match { .. } => {
+                // Match not yet implemented in interpreter
+                Ok(ControlFlow::None)
+            }
         }
     }
 
@@ -426,6 +461,14 @@ impl IshVm {
                             val.type_name()
                         ))),
                     },
+                    UnaryOperator::Try => {
+                        // ? operator: if value is an error, propagate it; otherwise unwrap
+                        // For now, null signals error
+                        if val == Value::Null {
+                            return Err(RuntimeError::new("tried to unwrap null value with ?".to_string()));
+                        }
+                        Ok(val)
+                    }
                 }
             }
 
@@ -501,6 +544,32 @@ impl IshVm {
             Expression::Lambda { params, body } => {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 Ok(new_function(None, param_names, *body.clone(), env.clone()))
+            }
+
+            Expression::StringInterpolation(parts) => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        ish_ast::StringPart::Text(text) => result.push_str(text),
+                        ish_ast::StringPart::Expr(expr) => {
+                            let val = self.eval_expression(expr, env)?;
+                            result.push_str(&val.to_display_string());
+                        }
+                    }
+                }
+                Ok(Value::String(Rc::new(result)))
+            }
+
+            Expression::CommandSubstitution(_) => {
+                Err(RuntimeError::new("Command substitution is not supported in this execution mode"))
+            }
+
+            Expression::EnvVar(name) => {
+                // Look up environment variable
+                match std::env::var(name) {
+                    Ok(val) => Ok(Value::String(Rc::new(val))),
+                    Err(_) => Ok(Value::Null),
+                }
             }
         }
     }

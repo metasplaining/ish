@@ -76,7 +76,7 @@ pub fn stmt_to_value(stmt: &Statement) -> Value {
             map.insert("kind".to_string(), str_val("expr_stmt"));
             map.insert("expression".to_string(), expr_to_value(expr));
         }
-        Statement::FunctionDecl { name, params, return_type: _, body } => {
+        Statement::FunctionDecl { name, params, return_type: _, body, .. } => {
             map.insert("kind".to_string(), str_val("function_decl"));
             map.insert("name".to_string(), str_val(name));
             let param_vals: Vec<Value> = params
@@ -130,6 +130,48 @@ pub fn stmt_to_value(stmt: &Statement) -> Value {
         Statement::Defer { body } => {
             map.insert("kind".to_string(), str_val("defer"));
             map.insert("body".to_string(), stmt_to_value(body));
+        }
+        Statement::TypeAlias { name, definition: _, .. } => {
+            map.insert("kind".to_string(), str_val("type_alias"));
+            map.insert("name".to_string(), str_val(name));
+        }
+        Statement::Use { path } => {
+            map.insert("kind".to_string(), str_val("use"));
+            let path_vals: Vec<Value> = path.iter().map(|s| str_val(s)).collect();
+            map.insert("path".to_string(), new_list(path_vals));
+        }
+        Statement::ModDecl { name, body, .. } => {
+            map.insert("kind".to_string(), str_val("mod_decl"));
+            map.insert("name".to_string(), str_val(name));
+            if let Some(b) = body {
+                map.insert("body".to_string(), stmt_to_value(b));
+            }
+        }
+        Statement::ShellCommand { command, args, background, .. } => {
+            map.insert("kind".to_string(), str_val("shell_command"));
+            map.insert("command".to_string(), str_val(command));
+            let arg_vals: Vec<Value> = args.iter().map(|a| match a {
+                ish_ast::ShellArg::Bare(s) | ish_ast::ShellArg::Glob(s)
+                | ish_ast::ShellArg::Quoted(s) | ish_ast::ShellArg::EnvVar(s) => str_val(s),
+                ish_ast::ShellArg::CommandSub(cmd) => stmt_to_value(cmd),
+            }).collect();
+            map.insert("args".to_string(), new_list(arg_vals));
+            map.insert("background".to_string(), Value::Bool(*background));
+        }
+        Statement::Annotated { inner, .. } => {
+            map.insert("kind".to_string(), str_val("annotated"));
+            map.insert("inner".to_string(), stmt_to_value(inner));
+        }
+        Statement::StandardDef { name, .. } => {
+            map.insert("kind".to_string(), str_val("standard_def"));
+            map.insert("name".to_string(), str_val(name));
+        }
+        Statement::EntryTypeDef { name, .. } => {
+            map.insert("kind".to_string(), str_val("entry_type_def"));
+            map.insert("name".to_string(), str_val(name));
+        }
+        Statement::Match { .. } => {
+            map.insert("kind".to_string(), str_val("match"));
         }
     }
     Value::Object(Gc::new(GcCell::new(map)))
@@ -225,6 +267,35 @@ pub fn expr_to_value(expr: &Expression) -> Value {
                 .collect();
             map.insert("params".to_string(), new_list(param_vals));
             map.insert("body".to_string(), stmt_to_value(body));
+        }
+        Expression::StringInterpolation(parts) => {
+            map.insert("kind".to_string(), str_val("string_interpolation"));
+            let part_vals: Vec<Value> = parts
+                .iter()
+                .map(|part| match part {
+                    ish_ast::StringPart::Text(text) => {
+                        let mut pm = HashMap::new();
+                        pm.insert("type".to_string(), str_val("text"));
+                        pm.insert("value".to_string(), str_val(text));
+                        Value::Object(Gc::new(GcCell::new(pm)))
+                    }
+                    ish_ast::StringPart::Expr(expr) => {
+                        let mut pm = HashMap::new();
+                        pm.insert("type".to_string(), str_val("expr"));
+                        pm.insert("value".to_string(), expr_to_value(expr));
+                        Value::Object(Gc::new(GcCell::new(pm)))
+                    }
+                })
+                .collect();
+            map.insert("parts".to_string(), new_list(part_vals));
+        }
+        Expression::CommandSubstitution(cmd) => {
+            map.insert("kind".to_string(), str_val("command_substitution"));
+            map.insert("command".to_string(), stmt_to_value(cmd));
+        }
+        Expression::EnvVar(name) => {
+            map.insert("kind".to_string(), str_val("env_var"));
+            map.insert("name".to_string(), str_val(name));
         }
     }
     Value::Object(Gc::new(GcCell::new(map)))
@@ -342,6 +413,8 @@ pub fn value_to_stmt(value: &Value) -> Result<Statement, RuntimeError> {
                 params,
                 return_type: None,
                 body: Box::new(body),
+                visibility: None,
+                type_params: vec![],
             })
         }
         "throw" => {
@@ -642,6 +715,7 @@ fn unop_name(op: &UnaryOperator) -> &'static str {
     match op {
         UnaryOperator::Not => "not",
         UnaryOperator::Negate => "negate",
+        UnaryOperator::Try => "try",
     }
 }
 
@@ -649,6 +723,7 @@ fn parse_unop(s: &str) -> Result<UnaryOperator, RuntimeError> {
     match s {
         "not" => Ok(UnaryOperator::Not),
         "negate" => Ok(UnaryOperator::Negate),
+        "try" => Ok(UnaryOperator::Try),
         _ => Err(RuntimeError::new(format!("unknown unary operator: '{}'", s))),
     }
 }

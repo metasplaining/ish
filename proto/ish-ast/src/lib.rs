@@ -28,6 +28,12 @@ pub enum TypeAnnotation {
         params: Vec<TypeAnnotation>,
         ret: Box<TypeAnnotation>,
     },
+    Union(Vec<TypeAnnotation>),
+    Tuple(Vec<TypeAnnotation>),
+    Generic {
+        base: String,                           // e.g. "List"
+        type_args: Vec<TypeAnnotation>,         // e.g. [Simple("int")]
+    },
 }
 
 // ── AST node types ──────────────────────────────────────────────────────────
@@ -72,12 +78,14 @@ pub enum BinaryOperator {
 pub enum UnaryOperator {
     Not,
     Negate,
+    Try,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Parameter {
     pub name: String,
     pub type_annotation: Option<TypeAnnotation>,
+    pub default_value: Option<Expression>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -111,6 +119,15 @@ pub enum Expression {
         params: Vec<Parameter>,
         body: Box<Statement>, // must be a Block
     },
+    StringInterpolation(Vec<StringPart>),
+    CommandSubstitution(Box<Statement>), // $(...) — wraps a ShellCommand or pipeline
+    EnvVar(String), // $HOME or ${PATH}
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum StringPart {
+    Text(String),
+    Expr(Expression),
 }
 
 // ── Statements ──────────────────────────────────────────────────────────────
@@ -119,8 +136,10 @@ pub enum Expression {
 pub enum Statement {
     VariableDecl {
         name: String,
+        mutable: bool,
         type_annotation: Option<TypeAnnotation>,
         value: Expression,
+        visibility: Option<Visibility>,
     },
     Assignment {
         target: AssignTarget,
@@ -152,6 +171,8 @@ pub enum Statement {
         params: Vec<Parameter>,
         return_type: Option<TypeAnnotation>,
         body: Box<Statement>, // must be a Block
+        visibility: Option<Visibility>,
+        type_params: Vec<String>, // generic type parameters: <T, U>
     },
     Throw {
         value: Expression,
@@ -168,6 +189,114 @@ pub enum Statement {
     Defer {
         body: Box<Statement>,
     },
+    TypeAlias {
+        name: String,
+        definition: TypeAnnotation,
+        visibility: Option<Visibility>,
+    },
+    Use {
+        path: Vec<String>,
+    },
+    ModDecl {
+        name: String,
+        body: Option<Box<Statement>>, // None = file module, Some = inline block
+        visibility: Option<Visibility>,
+    },
+    ShellCommand {
+        command: String,
+        args: Vec<ShellArg>,
+        pipes: Vec<ShellPipeline>,     // | chaining
+        redirections: Vec<Redirection>,
+        background: bool,              // trailing &
+    },
+    /// @standard[name] or @[entry, ...] before a declaration
+    Annotated {
+        annotations: Vec<Annotation>,
+        inner: Box<Statement>,
+    },
+    /// standard name extends? base [features]
+    StandardDef {
+        name: String,
+        extends: Option<String>,
+        features: Vec<FeatureSpec>,
+    },
+    /// entry type name { ... }
+    EntryTypeDef {
+        name: String,
+        fields: Vec<(String, Expression)>,
+    },
+    Match {
+        subject: Expression,
+        arms: Vec<MatchArm>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub body: Statement, // block or expression_stmt
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MatchPattern {
+    Literal(Literal),                   // 0, "hello", true, null
+    Identifier(String),                 // x (variable binding)
+    Wildcard,                           // _
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ShellArg {
+    Bare(String),           // bare-word argument (including flags like -la)
+    Quoted(String),         // "double-quoted" string
+    Glob(String),           // *.rs, file?.txt
+    EnvVar(String),         // $HOME, ${PATH}
+    CommandSub(Box<Statement>), // $(cmd)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShellPipeline {
+    pub command: String,
+    pub args: Vec<ShellArg>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Redirection {
+    pub kind: RedirectKind,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum RedirectKind {
+    StdoutWrite,      // >
+    StdoutAppend,     // >>
+    StderrWrite,      // 2>
+    StderrAndStdout,  // 2>&1
+    AllWrite,         // &>
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Visibility {
+    Private,
+    Public,
+    PubScope(String), // e.g. pub(super), pub(global)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Annotation {
+    Standard(String),                       // @standard[name]
+    Entry(Vec<EntryItem>),                  // @[entry, entry(value), ...]
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntryItem {
+    pub name: String,
+    pub value: Option<String>,              // e.g. type(i32) → value = Some("i32")
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeatureSpec {
+    pub name: String,
+    pub params: Vec<String>,                // e.g. overflow(saturating) → params = ["saturating"]
 }
 
 /// A catch clause within a try/catch statement.
@@ -262,8 +391,10 @@ impl Statement {
     pub fn var_decl(name: impl Into<String>, value: Expression) -> Self {
         Statement::VariableDecl {
             name: name.into(),
+            mutable: false,
             type_annotation: None,
             value,
+            visibility: None,
         }
     }
     pub fn assign(name: impl Into<String>, value: Expression) -> Self {
@@ -329,6 +460,8 @@ impl Statement {
             params,
             return_type: None,
             body: Box::new(body),
+            visibility: None,
+            type_params: vec![],
         }
     }
     pub fn throw(value: Expression) -> Self {
@@ -383,12 +516,14 @@ impl Parameter {
         Parameter {
             name: name.into(),
             type_annotation: None,
+            default_value: None,
         }
     }
     pub fn typed(name: impl Into<String>, ty: TypeAnnotation) -> Self {
         Parameter {
             name: name.into(),
             type_annotation: Some(ty),
+            default_value: None,
         }
     }
 }

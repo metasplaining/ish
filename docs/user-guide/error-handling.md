@@ -3,8 +3,8 @@ title: "User Guide: Error Handling"
 category: user-guide
 audience: [human-dev]
 status: draft
-last-verified: 2026-03-11
-depends-on: [docs/spec/types.md, docs/spec/assurance-ledger.md]
+last-verified: 2026-03-14
+depends-on: [docs/spec/types.md, docs/spec/assurance-ledger.md, docs/spec/syntax.md]
 ---
 
 # Error Handling
@@ -17,13 +17,13 @@ ish uses thrown exceptions for error handling. Errors are values — specificall
 
 Create errors with the `new_error` built-in:
 
-```
-let err = new_error("something went wrong");
+```ish
+let err = new_error("something went wrong")
 ```
 
 Error objects are regular objects with a `message` property and an `__is_error__` metadata flag. You can inspect them with `is_error()` and `error_message()`:
 
-```
+```ish
 is_error(err)        // true
 error_message(err)   // "something went wrong"
 ```
@@ -36,8 +36,8 @@ Only error objects should be thrown (this will be enforced by the type system wh
 
 The `throw` statement raises an error:
 
-```
-throw new_error("file not found");
+```ish
+throw new_error("file not found")
 ```
 
 A throw unwinds execution until it reaches a `try`/`catch` block or a function boundary. When a throw escapes a function, it becomes a runtime error that the caller must handle.
@@ -48,13 +48,13 @@ A throw unwinds execution until it reaches a `try`/`catch` block or a function b
 
 Use `try`/`catch` to handle thrown errors, and `finally` for cleanup that must always run:
 
-```
+```ish
 try {
-    let data = read_file("config.json");
+    let data = read_file("config.json")
 } catch (e) {
-    println("Error: " + error_message(e));
+    println("Error: " + error_message(e))
 } finally {
-    println("cleanup complete");
+    println("cleanup complete")
 }
 ```
 
@@ -66,9 +66,9 @@ try {
 
 Multiple catch clauses can be provided for type-based matching (when the type system supports it):
 
-```
+```ish
 try {
-    risky_operation();
+    risky_operation()
 } catch (e: FileError) {
     // handle file errors
 } catch (e: NetworkError) {
@@ -80,22 +80,48 @@ Currently in the prototype, the first catch clause always matches.
 
 ---
 
+## The `?` Operator
+
+The `?` operator is syntactic sugar for detecting if a function's return value is an error type and throwing it if it is:
+
+```ish
+let data = read_file("config.json")?
+```
+
+This is equivalent to:
+
+```ish
+let _result = read_file("config.json")
+if is_error(_result) {
+    throw _result
+}
+let data = _result
+```
+
+The `?` operator can be chained:
+
+```ish
+let parsed = parse(read_file("config.json")?)
+```
+
+---
+
 ## With Blocks (Resource Management)
 
 The `with` statement manages resources that need cleanup. Resources are initialized when the block begins and closed when it exits:
 
-```
+```ish
 with (f = open_file("data.txt")) {
-    let contents = f.read();
+    let contents = f.read()
 }
 // f.close() is called automatically here
 ```
 
 Multiple resources can be managed in a single `with` block:
 
-```
+```ish
 with (src = open_file("in.txt"), dest = open_file("out.txt")) {
-    dest.write(src.read());
+    dest.write(src.read())
 }
 // both are closed in reverse order
 ```
@@ -112,10 +138,10 @@ Key behaviors:
 
 The `defer` statement schedules cleanup to run when the enclosing **function** exits:
 
-```
+```ish
 fn process() {
-    let conn = connect_to_db();
-    defer conn.disconnect();
+    let conn = connect_to_db()
+    defer conn.disconnect()
 
     // use conn...
 }
@@ -124,26 +150,26 @@ fn process() {
 
 Defer is function-scoped, not block-scoped. A `defer` inside a conditional or loop accumulates on the enclosing function's defer stack and executes when the function returns — not when the block exits. This allows resources acquired in unpredictable control flow to be released in reverse order at a single, predictable point:
 
-```
+```ish
 fn open_all(paths) {
-    let files = [];
-    for_each (p in paths) {
-        let f = open_file(p);
-        defer f.close();
-        list_push(files, f);
+    let files = []
+    for p in paths {
+        let f = open_file(p)
+        defer f.close()
+        list_push(files, f)
     }
     // all files are still open here
-    return files;
+    return files
 }
 // all files are closed in reverse order when open_all returns
 ```
 
 Multiple defers execute in LIFO (last-in, first-out) order:
 
-```
+```ish
 fn example() {
-    defer println("first");
-    defer println("second");
+    defer println("first")
+    defer println("second")
 }
 // prints: "second", then "first"
 ```

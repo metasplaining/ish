@@ -16,6 +16,8 @@ Cleaned-up prompt files used as input to the `/propose` skill. Each RFP preserve
 | Date | Topic | File |
 |------|-------|------|
 | 2026-03-14 | Agreement Checking — Terminology and Syntax | [agreement-checking-terminology-and-syntax.md](agreement-checking-terminology-and-syntax.md) |
+| 2026-03-14 | Language Syntax | [language-syntax.md](language-syntax.md) |
+| 2026-03-15 | String Syntax | [string-syntax.md](string-syntax.md) |
 
 ---
 

@@ -129,6 +129,97 @@ impl<'a> fmt::Display for StmtDisplay<'a> {
                 indent(f, d)?;
                 write!(f, "defer {}", StmtDisplay(body, d))
             }
+            Statement::TypeAlias { name, .. } => {
+                indent(f, d)?;
+                write!(f, "type {} = ...", name)
+            }
+            Statement::Use { path } => {
+                indent(f, d)?;
+                write!(f, "use {}", path.join("::"))
+            }
+            Statement::ModDecl { name, body, .. } => {
+                indent(f, d)?;
+                if let Some(b) = body {
+                    write!(f, "mod {} {}", name, StmtDisplay(b, d))
+                } else {
+                    write!(f, "mod {}", name)
+                }
+            }
+            Statement::ShellCommand { command, args, background, .. } => {
+                indent(f, d)?;
+                write!(f, "{}", command)?;
+                for arg in args {
+                    match arg {
+                        ShellArg::Bare(s) | ShellArg::Glob(s) => write!(f, " {}", s)?,
+                        ShellArg::Quoted(s) => write!(f, " \"{}\"", s)?,
+                        ShellArg::EnvVar(s) => write!(f, " ${}", s)?,
+                        ShellArg::CommandSub(cmd) => write!(f, " $({})", StmtDisplay(cmd, 0))?,
+                    }
+                }
+                if *background { write!(f, " &")?; }
+                Ok(())
+            }
+            Statement::Annotated { annotations, inner } => {
+                for ann in annotations {
+                    indent(f, d)?;
+                    match ann {
+                        Annotation::Standard(name) => writeln!(f, "@standard[{}]", name)?,
+                        Annotation::Entry(items) => {
+                            write!(f, "@[")?;
+                            for (i, item) in items.iter().enumerate() {
+                                if i > 0 { write!(f, ", ")?; }
+                                write!(f, "{}", item.name)?;
+                                if let Some(v) = &item.value {
+                                    write!(f, "({})", v)?;
+                                }
+                            }
+                            writeln!(f, "]")?;
+                        }
+                    }
+                }
+                write!(f, "{}", StmtDisplay(inner, d))
+            }
+            Statement::StandardDef { name, extends, features } => {
+                indent(f, d)?;
+                write!(f, "standard {}", name)?;
+                if let Some(base) = extends {
+                    write!(f, " extends {}", base)?;
+                }
+                write!(f, " [")?;
+                for (i, feat) in features.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", feat.name)?;
+                    if !feat.params.is_empty() {
+                        write!(f, "({})", feat.params.join(", "))?;
+                    }
+                }
+                write!(f, "]")
+            }
+            Statement::EntryTypeDef { name, .. } => {
+                indent(f, d)?;
+                write!(f, "entry type {}", name)
+            }
+            Statement::Match { subject, arms } => {
+                indent(f, d)?;
+                writeln!(f, "match {} {{", ExprDisplay(subject))?;
+                for arm in arms {
+                    indent(f, d + 1)?;
+                    let pat = match &arm.pattern {
+                        MatchPattern::Literal(lit) => match lit {
+                            Literal::Bool(b) => format!("{}", b),
+                            Literal::Int(n) => format!("{}", n),
+                            Literal::Float(n) => format!("{}", n),
+                            Literal::String(s) => format!("\"{}\"", s),
+                            Literal::Null => "null".to_string(),
+                        },
+                        MatchPattern::Identifier(name) => name.clone(),
+                        MatchPattern::Wildcard => "_".to_string(),
+                    };
+                    writeln!(f, "{} => {}", pat, StmtDisplay(&arm.body, d + 2))?;
+                }
+                indent(f, d)?;
+                write!(f, "}}")
+            }
         }
     }
 }
@@ -148,11 +239,17 @@ impl<'a> fmt::Display for ExprDisplay<'a> {
                 write!(f, "({} {} {})", ExprDisplay(left), op_str(op), ExprDisplay(right))
             }
             Expression::UnaryOp { op, operand } => {
-                let op_s = match op {
-                    UnaryOperator::Not => "!",
-                    UnaryOperator::Negate => "-",
-                };
-                write!(f, "{}{}", op_s, ExprDisplay(operand))
+                match op {
+                    UnaryOperator::Try => write!(f, "{}?", ExprDisplay(operand)),
+                    _ => {
+                        let op_s = match op {
+                            UnaryOperator::Not => "!",
+                            UnaryOperator::Negate => "-",
+                            UnaryOperator::Try => unreachable!(),
+                        };
+                        write!(f, "{}{}", op_s, ExprDisplay(operand))
+                    }
+                }
             }
             Expression::FunctionCall { callee, args } => {
                 write!(f, "{}(", ExprDisplay(callee))?;
@@ -200,6 +297,22 @@ impl<'a> fmt::Display for ExprDisplay<'a> {
                 }
                 write!(f, ") ")?;
                 write!(f, "{}", StmtDisplay(body, 0))
+            }
+            Expression::StringInterpolation(parts) => {
+                write!(f, "f\"")?;
+                for part in parts {
+                    match part {
+                        StringPart::Text(text) => write!(f, "{}", text)?,
+                        StringPart::Expr(expr) => write!(f, "{{{}}}", ExprDisplay(expr))?,
+                    }
+                }
+                write!(f, "\"")
+            }
+            Expression::CommandSubstitution(cmd) => {
+                write!(f, "$({})", StmtDisplay(cmd, 0))
+            }
+            Expression::EnvVar(name) => {
+                write!(f, "${}", name)
             }
         }
     }

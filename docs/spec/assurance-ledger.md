@@ -45,8 +45,8 @@ An **entry** is a fact recorded about an item in the ledger. For example, `@[typ
 Entries can be created by native syntax or by explicit annotation. These are equivalent:
 
 ```ish
-let mut x: i32 = 7;
-@[mutable] @[type(i32)] let x = 7;
+let mut x: i32 = 7
+@[mutable] @[type(i32)] let x = 7
 ```
 
 Native syntax is preferred for readability. The annotation form exists for programmatic generation and for features that lack native syntax.
@@ -102,7 +102,7 @@ Standards are applied with `@standard[name]`:
 
 // Apply a named standard to a function:
 @standard[api_safety]
-fn get_user(id: UserId) -> User throws NotFoundError {
+fn get_user(id: UserId) -> User | NotFoundError {
     // ...
 }
 ```
@@ -116,12 +116,12 @@ Multiple `@standard[...]` annotations on the same scope are cumulative — featu
 Entries are applied with `@[entry(params)]`:
 
 ```ish
-@[overflow(wrapping)] let z: u8 = 255;
-@[memory(stack)] let buffer: List<u8> = alloc(1024);
-@[nullable] let name: String? = null;
+@[overflow(wrapping)] let z: u8 = 255
+@[memory(stack)] let buffer: List<u8> = alloc(1024)
+@[nullable] let name: String? = null
 @[pure]
 fn calculate(x: f64, y: f64) -> f64 {
-    return x * y + y;
+    return x * y + y
 }
 ```
 
@@ -130,8 +130,8 @@ Multiple entries on an item accumulate. Conflicting entries produce a discrepanc
 ### Custom Entries
 
 ```ish
-@[validated] @[sanitized] let user_input: String = clean(raw);
-@[thread_safe] let config: AppConfig = load_config();
+@[validated] @[sanitized] let user_input: String = clean(raw)
+@[thread_safe] let config: AppConfig = load_config()
 ```
 
 ---
@@ -172,9 +172,8 @@ Native syntax and entry annotations are fully interchangeable. The following tab
 | `?` suffix | `@[nullable]` | variable, property |
 | `mut` | `@[mutable]` | variable, property |
 | `async` | `@[async]` | function, block |
-| `throws E` | `@[throws(E)]` | function |
+| Error union types | `@[throws(E)]` | function |
 | `pub(...)` | `@[visibility(pub(...))]` | variable, function, type, module |
-| `nominal type` | `@[nominal(Name)]` | type |
 
 ---
 
@@ -343,21 +342,21 @@ type User = {
 // ── Functions ──────────────────────────────────────
 @standard[api_safety]
 @[rate_limited]
-fn get_user(id: i64) -> User throws NotFoundError {
-    let raw = db.query("SELECT * FROM users WHERE id = ?", id);
-    return validate(User, raw);
+fn get_user(id: i64) -> User | NotFoundError {
+    let raw = db.query("SELECT * FROM users WHERE id = ?", id)
+    return validate(User, raw)
 }
 
 fn critical_calculation(values: List<f64>) -> f64 {
     @standard[rigorous]
     {
-        let mut sum: f64 = 0.0;
-        let mut count: u64 = 0;
+        let mut sum: f64 = 0.0
+        let mut count: u64 = 0
         for v in values {
-            sum = sum + v;
-            count = count + 1;
+            sum = sum + v
+            count = count + 1
         }
-        return sum / count.to_f64();
+        return sum / count.to_f64()
     }
 }
 ```

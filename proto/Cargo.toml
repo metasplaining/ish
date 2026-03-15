@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "ish-ast",
+    "ish-parser",
     "ish-vm",
     "ish-runtime",
     "ish-codegen",

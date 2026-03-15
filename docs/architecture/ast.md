@@ -3,8 +3,8 @@ title: "Architecture: ish-ast"
 category: architecture
 audience: [all]
 status: draft
-last-verified: 2026-03-11
-depends-on: [docs/architecture/overview.md]
+last-verified: 2026-03-14
+depends-on: [docs/architecture/overview.md, docs/spec/syntax.md]
 ---
 
 # ish-ast
@@ -107,12 +107,12 @@ The builder closures (`|b| b.ret(...)`) return `&mut BlockBuilder` for chaining.
 
 `Program` implements `fmt::Display`, producing pseudo-code:
 
-```
+```ish
 fn factorial(n) {
-    if (n <= 1) {
-        return 1;
+    if n <= 1 {
+        return 1
     } else {
-        return (n * factorial((n - 1)));
+        return n * factorial(n - 1)
     }
 }
 ```
@@ -135,7 +135,7 @@ The following AST nodes support error handling:
 - **`TryCatch { body, catches, finally }`** — Executes the body; if a throw occurs, matches against catch clauses; always executes the finally block.
 - **`CatchClause { param, type_annotation, body }`** — Binds the thrown value to `param` and executes the body. The `type_annotation` enables type-based catch matching (not yet implemented).
 - **`WithBlock { resources, body }`** — Initializes resources, executes the body, then closes resources in reverse order.
-- **`Defer { body }`** — Schedules the body to execute when the enclosing block exits.
+- **`Defer { body }`** — Schedules the body to execute when the enclosing function exits (function-scoped, not block-scoped).
 
 ---
 

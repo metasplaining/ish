@@ -19,6 +19,7 @@ Structured proposals generated from prompt files using the `/propose` skill. Eac
 | 2026-03-14 | Ledger System — Naming and Complete Syntax | accepted; superseded by assurance-ledger-syntax.md | [ledger-system-syntax.md](ledger-system-syntax.md) |
 | 2026-03-14 | Agreement Metaphor and Syntax | accepted; superseded by assurance-ledger-syntax.md | [agreement-metaphor-and-syntax.md](agreement-metaphor-and-syntax.md) |
 | 2026-03-11 | Error Handling | accepted | [error-handling.md](error-handling.md) |
+| 2026-03-14 | Language Syntax | accepted | [language-syntax.md](language-syntax.md) |
 
 ---
 
