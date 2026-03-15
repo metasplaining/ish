@@ -9,7 +9,7 @@ depends-on: [docs/project/proposals/ledger-system-syntax.md, docs/project/propos
 
 # Proposal: Assurance Ledger — Standards, Entries, and Complete Syntax
 
-*Follow-on to [ledger-system-syntax.md](ledger-system-syntax.md). Generated from `agreement` on 2026-03-14.*
+*Follow-on to [ledger-system-syntax.md](ledger-system-syntax.md). Generated from [agreement-checking-terminology-and-syntax.md](../rfp/agreement-checking-terminology-and-syntax.md) on 2026-03-14.*
 
 **Decisions carried forward from prior proposals:**
 

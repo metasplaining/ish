@@ -18,14 +18,21 @@ Read a prompt file containing questions and feature requests, then produce a str
 
 1. **Read the input file** at the path provided by the user. If no path is given, ask for one.
 
-2. **Identify the contents.** Extract:
+2. **Convert the input file to a Request for Proposal (RFP).** Before doing anything else:
+   - Clean up the formatting of the input file (fix Markdown structure, indentation, code fences).
+   - Correct grammar, spelling, and typos.
+   - Preserve the original meanings — do not add, remove, or alter the intent of any content.
+   - Save the RFP to `docs/project/rfp/<name>.md` where `<name>` is a meaningful slug derived from the primary topic. Use standard YAML frontmatter with `category: rfp`.
+   - Update the RFP index at `docs/project/rfp/INDEX.md` (create it if it doesn't exist).
+
+3. **Identify the contents.** Extract from the RFP (not the original prompt):
    - Any questions that need answering
    - Any feature requests or changes being proposed
    - Any constraints or context provided
 
-3. **Answer all questions.** For each question found in the file, research the codebase and provide a thorough answer.
+4. **Answer all questions.** For each question found in the RFP, research the codebase and provide a thorough answer.
 
-4. **Analyze each feature or change.** For every feature request or proposed change, write the following sections:
+5. **Analyze each feature or change.** For every feature request or proposed change, write the following sections:
 
    ### Issues to Watch Out For
    Identify risks, edge cases, backwards compatibility concerns, and potential pitfalls.
@@ -43,14 +50,14 @@ Read a prompt file containing questions and feature requests, then produce a str
    -->
    ```
 
-5. **Append a Documentation Updates section.** List the documentation files likely affected by the proposed changes, referencing `depends-on` frontmatter and cross-references. Include a reminder to update `## Referenced by` sections.
+6. **Append a Documentation Updates section.** List the documentation files likely affected by the proposed changes, referencing `depends-on` frontmatter and cross-references. Include a reminder to update `## Referenced by` sections.
 
-6. **Append a History Updates section.** Remind the implementer to:
+7. **Append a History Updates section.** Remind the implementer to:
    - Add a history file under `docs/project/history/` named `<isodate>-<topic>.md`
    - Write it as human-oriented narrative prose (per project conventions)
    - Update the [history index](docs/project/history/INDEX.md)
 
-7. **Save the output** to `docs/project/proposals/<name>.md` where `<name>` is derived from the input filename or the primary topic. If the proposals directory doesn't exist, create it.
+8. **Save the output** to `docs/project/proposals/<name>.md` where `<name>` is derived from the RFP filename or the primary topic. If the proposals directory doesn't exist, create it. The proposal must reference the RFP, not the original prompt file.
 
 ## Output Format
 
@@ -59,7 +66,7 @@ The saved proposal file should follow this structure:
 ```markdown
 # Proposal: <Topic>
 
-*Generated from `<input-file-path>` on <date>.*
+*Generated from [<rfp-filename>](../rfp/<rfp-filename>) on <date>.*
 
 ## Questions and Answers
 

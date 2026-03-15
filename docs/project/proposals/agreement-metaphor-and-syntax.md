@@ -11,7 +11,7 @@ depends-on: [docs/spec/assurance-ledger.md, docs/spec/types.md, docs/spec/execut
 
 > **Status: Accepted.** Superseded by [assurance-ledger-syntax.md](assurance-ledger-syntax.md). Decisions from this proposal were carried forward into the final design.
 
-*Generated from `agreement` on 2026-03-14.*
+*Generated from [agreement-checking-terminology-and-syntax.md](../rfp/agreement-checking-terminology-and-syntax.md) on 2026-03-14.*
 
 ---
 

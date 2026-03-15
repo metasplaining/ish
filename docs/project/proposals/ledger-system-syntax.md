@@ -11,7 +11,7 @@ depends-on: [docs/project/proposals/agreement-metaphor-and-syntax.md, docs/spec/
 
 > **Status: Accepted.** Superseded by [assurance-ledger-syntax.md](assurance-ledger-syntax.md). Decisions from this proposal were carried forward into the final design.
 
-*Follow-on to [agreement-metaphor-and-syntax.md](agreement-metaphor-and-syntax.md). Generated from `agreement` on 2026-03-14.*
+*Follow-on to [agreement-metaphor-and-syntax.md](agreement-metaphor-and-syntax.md). Generated from [agreement-checking-terminology-and-syntax.md](../rfp/agreement-checking-terminology-and-syntax.md) on 2026-03-14.*
 
 **Decisions carried forward from the prior proposal:**
 - Metaphor: **Ledger** (accounting/bookkeeping)

@@ -79,6 +79,7 @@ Playbooks and reference for AI agents writing ish code.
 | [project/documentation-debt.md](project/documentation-debt.md) | Documentation debt tracking |
 | [project/decisions/INDEX.md](project/decisions/INDEX.md) | Architecture Decision Records |
 | [project/proposals/INDEX.md](project/proposals/INDEX.md) | Proposals for review |
+| [project/rfp/INDEX.md](project/rfp/INDEX.md) | Requests for Proposal |
 | [project/history/INDEX.md](project/history/INDEX.md) | Development history |
 
 ---

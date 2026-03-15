@@ -26,7 +26,7 @@ ish/
 │   ├── architecture/      Architecture and internals
 │   ├── user-guide/        User guide for human developers
 │   ├── ai-guide/          User guide for AI developers
-│   ├── project/           Roadmap, maturity, decisions, history
+│   ├── project/           Roadmap, maturity, decisions, history, rfp
 │   └── errors/            Error catalog
 └── proto/                 Prototype implementation (Rust)
 ```
@@ -92,6 +92,15 @@ depends-on: [list of files this doc references for its claims]
 ### Open questions
 
 Each specification file has an `## Open Questions` section at the bottom. These are also indexed in [docs/project/open-questions.md](docs/project/open-questions.md) organized by topic. Cross-links go both ways.
+
+### Requests for Proposal (RFPs)
+
+When a prompt file is used to generate a proposal via the `/propose` skill, the prompt is first converted into a **Request for Proposal (RFP)**. The RFP is a cleaned-up version of the original prompt with corrected grammar, formatting, and typos, but with all original meanings preserved.
+
+- RFPs are saved to `docs/project/rfp/` with a meaningful filename.
+- RFPs use standard YAML frontmatter with `category: rfp`.
+- The RFP index at `docs/project/rfp/INDEX.md` tracks all RFPs.
+- Proposals reference their RFP, not the original prompt file.
 
 ---
 
