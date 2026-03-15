@@ -42,6 +42,18 @@ cargo test --workspace     # Runs all 45 tests
 println("Hello, world!")
 ```
 
+### String Basics
+
+ish uses shell-convention quoting — single quotes for literal strings, double quotes for interpolating strings:
+
+```ish
+let name = 'Alice'                       // literal string (no interpolation)
+let greeting = "Hello, {name}!"          // interpolation with {expr}
+let home = "Home: $HOME"                 // environment variable expansion
+```
+
+See [docs/spec/syntax.md § Strings](../spec/syntax.md#strings) for the full string syntax.
+
 ---
 
 ## Next Steps

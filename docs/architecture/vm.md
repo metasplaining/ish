@@ -23,6 +23,7 @@ pub enum Value {
     Int(i64),
     Float(f64),
     String(Rc<String>),
+    Char(char),
     Null,
     Object(ObjectRef),              // Gc<GcCell<HashMap<String, Value>>>
     List(ListRef),                  // Gc<GcCell<Vec<Value>>>
@@ -33,8 +34,8 @@ pub enum Value {
 
 - **GC-managed:** Objects, Lists, and Functions use the `gc` crate (v0.5)
 - **Strings** use `Rc<String>` (cheap cloning, no GC overhead for immutable data)
-- **`PartialEq`** supports cross-type Int/Float comparison
-- **`is_truthy()`** — false for `false`, `0`, `0.0`, `Null`; true for everything else
+- **`PartialEq`** supports cross-type Int/Float comparison and Char equality
+- **`is_truthy()`** — false for `false`, `0`, `0.0`, `Null`; true for everything else (including `Char`)
 
 ---
 
@@ -114,7 +115,7 @@ The `Throw` statement evaluates its expression and returns `ControlFlow::Throw(v
 | Lists | `list_push`, `list_pop`, `list_length`, `list_get`, `list_set`, `list_slice`, `list_join` |
 | Objects | `obj_get`, `obj_set`, `obj_has`, `obj_keys`, `obj_values`, `obj_remove` |
 | Types | `type_of`, `is_type` |
-| Conversion | `to_string`, `to_int`, `to_float` |
+| Conversion | `to_string`, `to_int`, `to_float`, `char` |
 | Errors | `new_error`, `is_error`, `error_message` |
 
 ---
@@ -137,6 +138,7 @@ Every node is an Object with a `"kind"` field:
 
 ```json
 { "kind": "literal", "literal_type": "int", "value": 42 }
+{ "kind": "literal", "literal_type": "char", "value": "A" }
 { "kind": "identifier", "name": "x" }
 { "kind": "binary_op", "op": "add", "left": {...}, "right": {...} }
 { "kind": "var_decl", "name": "x", "value": {...} }
@@ -156,7 +158,7 @@ Every node is an Object with a `"kind"` field:
 
 ## Tests
 
-- `interpreter.rs`: 19 tests (execution) + 14 error handling tests
+- `interpreter.rs`: 19 tests (execution) + 14 error handling tests + 8 char/string syntax tests
 - `builtins.rs`: 6 tests
 - `reflection.rs`: 4 tests
 

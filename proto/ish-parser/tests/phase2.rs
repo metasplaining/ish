@@ -272,26 +272,22 @@ mod tests {
         }
     }
 
-    // ── F-strings (String Interpolation) ────────────────────────────────
+    // ── Interpolated Strings ────────────────────────────────────────────
 
     #[test]
     fn test_f_string_no_interpolation() {
-        let prog = parse("f\"hello world\"").unwrap();
+        let prog = parse("\"hello world\"").unwrap();
         match &prog.statements[0] {
-            Statement::ExpressionStmt(Expression::StringInterpolation(parts)) => {
-                assert_eq!(parts.len(), 1);
-                match &parts[0] {
-                    StringPart::Text(s) => assert_eq!(s, "hello world"),
-                    other => panic!("expected text part, got {:?}", other),
-                }
+            Statement::ExpressionStmt(Expression::Literal(Literal::String(s))) => {
+                assert_eq!(s, "hello world");
             }
-            other => panic!("expected string interpolation, got {:?}", other),
+            other => panic!("expected string literal, got {:?}", other),
         }
     }
 
     #[test]
     fn test_f_string_simple_interpolation() {
-        let prog = parse("f\"hello {name}\"").unwrap();
+        let prog = parse("\"hello {name}\"").unwrap();
         match &prog.statements[0] {
             Statement::ExpressionStmt(Expression::StringInterpolation(parts)) => {
                 assert_eq!(parts.len(), 2);
@@ -310,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_f_string_multiple_interpolations() {
-        let prog = parse("f\"{a} and {b}\"").unwrap();
+        let prog = parse("\"{a} and {b}\"").unwrap();
         match &prog.statements[0] {
             Statement::ExpressionStmt(Expression::StringInterpolation(parts)) => {
                 assert_eq!(parts.len(), 3);
@@ -333,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_f_string_with_expression() {
-        let prog = parse("f\"result: {1 + 2}\"").unwrap();
+        let prog = parse("\"result: {1 + 2}\"").unwrap();
         match &prog.statements[0] {
             Statement::ExpressionStmt(Expression::StringInterpolation(parts)) => {
                 assert_eq!(parts.len(), 2);

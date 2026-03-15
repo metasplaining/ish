@@ -209,7 +209,8 @@ impl<'a> fmt::Display for StmtDisplay<'a> {
                             Literal::Bool(b) => format!("{}", b),
                             Literal::Int(n) => format!("{}", n),
                             Literal::Float(n) => format!("{}", n),
-                            Literal::String(s) => format!("\"{}\"", s),
+                            Literal::String(s) => format!("'{}'", s),
+                            Literal::Char(c) => format!("c'{}'", c),
                             Literal::Null => "null".to_string(),
                         },
                         MatchPattern::Identifier(name) => name.clone(),
@@ -231,7 +232,8 @@ impl<'a> fmt::Display for ExprDisplay<'a> {
                 Literal::Bool(b) => write!(f, "{}", b),
                 Literal::Int(n) => write!(f, "{}", n),
                 Literal::Float(n) => write!(f, "{}", n),
-                Literal::String(s) => write!(f, "\"{}\"", s),
+                Literal::String(s) => write!(f, "'{}'", s),
+                Literal::Char(c) => write!(f, "c'{}'", c),
                 Literal::Null => write!(f, "null"),
             },
             Expression::Identifier(name) => write!(f, "{}", name),
@@ -299,10 +301,11 @@ impl<'a> fmt::Display for ExprDisplay<'a> {
                 write!(f, "{}", StmtDisplay(body, 0))
             }
             Expression::StringInterpolation(parts) => {
-                write!(f, "f\"")?;
+                write!(f, "\"")?;
                 for part in parts {
                     match part {
                         StringPart::Text(text) => write!(f, "{}", text)?,
+                        StringPart::Expr(Expression::EnvVar(name)) => write!(f, "${}", name)?,
                         StringPart::Expr(expr) => write!(f, "{{{}}}", ExprDisplay(expr))?,
                     }
                 }

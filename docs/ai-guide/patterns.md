@@ -15,7 +15,7 @@ Patterns that recur in idiomatic ish code. Use these as templates when generatin
 
 ```
 let config = {}
-config.host = "localhost"
+config.host = 'localhost'
 config.port = 8080
 config.debug = true
 start_server(config)
@@ -31,7 +31,7 @@ type ServerConfig = {
 }
 
 let config: ServerConfig = {
-    host: "localhost",
+    host: 'localhost',
     port: 8080,
     debug: true
 }
@@ -49,7 +49,7 @@ if name { print(name) }
 let name: String? = get_name()
 match name {
     Some(n) -> print(n)
-    None -> print("anonymous")
+    None -> print('anonymous')
 }
 ```
 
@@ -60,7 +60,7 @@ fn parse(input: String) -> Int | ParseError {
     // ...
 }
 
-match parse("42") {
+match parse('42') {
     Int(n) -> use(n)
     ParseError(e) -> report(e)
 }
@@ -71,10 +71,36 @@ match parse("42") {
 ```
 // Any object with a .name field works
 fn greet(thing: { name: String }) {
-    print("Hello, " + thing.name)
+    print("Hello, {thing.name}")
 }
 
-greet({ name: "Alice", age: 30 })  // OK — extra fields ignored
+greet({ name: 'Alice', age: 30 })  // OK — extra fields ignored
+```
+
+## String Patterns
+
+Use single quotes for literal strings and double quotes for interpolation:
+
+```
+// Literal strings (no interpolation)
+let sql = 'SELECT * FROM users'
+let regex = '(\d+)\s+'
+let json = '{"key": "value"}'
+
+// Interpolation
+let msg = "Hello, {name}!"
+let path = "Home: $HOME"
+
+// Multiline
+let query = """
+    SELECT *
+    FROM {table}
+    WHERE id = {id}
+    """
+
+// Char literals
+let ch = c'A'
+let newline = c'\n'
 ```
 
 ---

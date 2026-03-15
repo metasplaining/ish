@@ -51,6 +51,7 @@ pub enum Literal {
     Int(i64),
     Float(f64),
     String(String),
+    Char(char),
     Null,
 }
 
@@ -335,6 +336,9 @@ impl Expression {
     }
     pub fn string(v: impl Into<String>) -> Self {
         Expression::Literal(Literal::String(v.into()))
+    }
+    pub fn char_lit(c: char) -> Self {
+        Expression::Literal(Literal::Char(c))
     }
     pub fn null() -> Self {
         Expression::Literal(Literal::Null)

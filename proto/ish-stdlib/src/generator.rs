@@ -77,6 +77,15 @@ fn build_generator() -> Program {
                                 Expression::call(Expression::ident("str_concat"), vec![Expression::ident("val"), Expression::string("\"")]),
                             ])),
                         )
+                        .if_then(Expression::binary(BinaryOperator::Eq, Expression::ident("lt"), Expression::string("char")),
+                            |b| b.ret(Expression::call(Expression::ident("str_concat"), vec![
+                                Expression::string("'"),
+                                Expression::call(Expression::ident("str_concat"), vec![
+                                    Expression::call(Expression::ident("to_string"), vec![Expression::ident("val")]),
+                                    Expression::string("'"),
+                                ]),
+                            ])),
+                        )
                         .ret(Expression::string("()")), // null
                 )
                 // identifier

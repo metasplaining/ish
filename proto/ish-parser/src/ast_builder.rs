@@ -450,7 +450,7 @@ fn build_primary_type(pair: Pair<Rule>) -> Result<TypeAnnotation, ParseError> {
             Ok(TypeAnnotation::Object(fields))
         }
         Rule::function_type => {
-            let mut parts = inner.into_inner();
+            let parts = inner.into_inner();
             let mut params = Vec::new();
             let mut ret = None;
             for p in parts {
@@ -548,7 +548,7 @@ fn build_mod_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
 }
 
 fn build_annotated_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
-    let mut inner = pair.into_inner();
+    let inner = pair.into_inner();
     let mut annotations = Vec::new();
 
     // Collect annotations until we hit the inner statement
@@ -711,6 +711,10 @@ fn build_shell_simple_command(pair: Pair<Rule>) -> (String, Vec<ShellArg>, Vec<R
                         let inner = word_inner.into_inner().next().unwrap();
                         words.push(ShellArg::Quoted(inner.as_str().to_string()));
                     }
+                    Rule::shell_single_string => {
+                        let inner = word_inner.into_inner().next().unwrap();
+                        words.push(ShellArg::Quoted(inner.as_str().to_string()));
+                    }
                     Rule::env_var => {
                         let raw = word_inner.as_str();
                         let name = if raw.starts_with("${") && raw.ends_with('}') {
@@ -806,7 +810,7 @@ pub fn build_expression(pair: Pair<Rule>) -> Result<Expression, ParseError> {
         Rule::null_literal => Ok(Expression::Literal(Literal::Null)),
         Rule::string_literal => {
             let inner = pair.into_inner().next().unwrap();
-            let s = unescape_string(inner.as_str());
+            let s = unescape_single_string(inner.as_str());
             Ok(Expression::Literal(Literal::String(s)))
         }
         Rule::identifier => Ok(Expression::Identifier(pair.as_str().to_string())),
@@ -814,7 +818,14 @@ pub fn build_expression(pair: Pair<Rule>) -> Result<Expression, ParseError> {
         Rule::object_literal => build_object_literal(pair),
         Rule::list_literal => build_list_literal(pair),
         Rule::lambda => build_lambda(pair),
-        Rule::f_string => build_f_string(pair),
+        Rule::interp_string => build_interp_string(pair),
+        Rule::triple_double_string => build_triple_double_string(pair),
+        Rule::triple_single_string => build_triple_single_string(pair),
+        Rule::char_literal => build_char_literal(pair),
+        Rule::extended_double_string => build_extended_string(pair),
+        Rule::extended_single_string => build_extended_string(pair),
+        Rule::extended_triple_double_string => build_extended_string(pair),
+        Rule::extended_triple_single_string => build_extended_string(pair),
         Rule::command_substitution => build_command_substitution(pair),
         Rule::env_var => {
             let raw = pair.as_str();
@@ -1018,7 +1029,17 @@ fn build_object_literal(pair: Pair<Rule>) -> Result<Expression, ParseError> {
                 Rule::identifier => key_pair.as_str().to_string(),
                 Rule::string_literal => {
                     let s_inner = key_pair.into_inner().next().unwrap();
-                    unescape_string(s_inner.as_str())
+                    unescape_single_string(s_inner.as_str())
+                }
+                Rule::interp_string => {
+                    // For object keys, only support non-interpolated double-quoted strings
+                    let mut text = String::new();
+                    for p in key_pair.into_inner() {
+                        if p.as_rule() == Rule::interp_string_text {
+                            text.push_str(&unescape_double_string(p.as_str()));
+                        }
+                    }
+                    text
                 }
                 _ => key_pair.as_str().to_string(),
             };
@@ -1077,24 +1098,113 @@ fn build_lambda(pair: Pair<Rule>) -> Result<Expression, ParseError> {
     })
 }
 
-fn build_f_string(pair: Pair<Rule>) -> Result<Expression, ParseError> {
+fn build_interp_string(pair: Pair<Rule>) -> Result<Expression, ParseError> {
     let mut parts = Vec::new();
     for p in pair.into_inner() {
         match p.as_rule() {
-            Rule::f_string_text => {
-                parts.push(StringPart::Text(p.as_str().to_string()));
+            Rule::interp_string_text => {
+                parts.push(StringPart::Text(unescape_double_string(p.as_str())));
             }
-            Rule::f_string_interp => {
+            Rule::interp_string_interp => {
                 let expr = build_expression(p.into_inner().next().unwrap())?;
                 parts.push(StringPart::Expr(expr));
+            }
+            Rule::interp_string_env => {
+                let raw = p.as_str();
+                let name = &raw[1..]; // strip leading $
+                parts.push(StringPart::Expr(Expression::EnvVar(name.to_string())));
             }
             _ => {}
         }
     }
+    // If there are no interpolation parts, emit a plain Literal::String
+    if parts.len() == 1 {
+        if let StringPart::Text(ref text) = parts[0] {
+            return Ok(Expression::Literal(Literal::String(text.clone())));
+        }
+    }
+    if parts.is_empty() {
+        return Ok(Expression::Literal(Literal::String(String::new())));
+    }
     Ok(Expression::StringInterpolation(parts))
 }
 
-fn unescape_string(s: &str) -> String {
+fn build_triple_double_string(pair: Pair<Rule>) -> Result<Expression, ParseError> {
+    let mut parts = Vec::new();
+    for p in pair.into_inner() {
+        match p.as_rule() {
+            Rule::triple_double_text => {
+                parts.push(StringPart::Text(p.as_str().to_string()));
+            }
+            Rule::triple_double_interp => {
+                let expr = build_expression(p.into_inner().next().unwrap())?;
+                parts.push(StringPart::Expr(expr));
+            }
+            Rule::triple_double_env => {
+                let raw = p.as_str();
+                let name = &raw[1..];
+                parts.push(StringPart::Expr(Expression::EnvVar(name.to_string())));
+            }
+            _ => {}
+        }
+    }
+    let parts = strip_triple_quote_indentation(parts);
+    if parts.len() == 1 {
+        if let StringPart::Text(ref text) = parts[0] {
+            return Ok(Expression::Literal(Literal::String(text.clone())));
+        }
+    }
+    if parts.is_empty() {
+        return Ok(Expression::Literal(Literal::String(String::new())));
+    }
+    Ok(Expression::StringInterpolation(parts))
+}
+
+fn build_triple_single_string(pair: Pair<Rule>) -> Result<Expression, ParseError> {
+    let inner = pair.into_inner().next().unwrap();
+    let raw = inner.as_str().to_string();
+    // Strip indentation based on closing delimiter position
+    let stripped = strip_triple_quote_literal(&raw);
+    Ok(Expression::Literal(Literal::String(stripped)))
+}
+
+fn build_char_literal(pair: Pair<Rule>) -> Result<Expression, ParseError> {
+    let inner = pair.into_inner().next().unwrap();
+    let raw = inner.as_str();
+    let ch = unescape_char_literal(raw).ok_or_else(|| {
+        ParseError::new(0, 0, format!("invalid char literal: {}", raw))
+    })?;
+    Ok(Expression::Literal(Literal::Char(ch)))
+}
+
+fn build_extended_string(pair: Pair<Rule>) -> Result<Expression, ParseError> {
+    // All extended delimiter forms: just take the inner content verbatim
+    let inner = pair.into_inner().next().unwrap();
+    Ok(Expression::Literal(Literal::String(inner.as_str().to_string())))
+}
+
+fn unescape_single_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('\'') => result.push('\''),
+                Some('\\') => result.push('\\'),
+                Some(other) => {
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+fn unescape_double_string(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
@@ -1108,11 +1218,18 @@ fn unescape_string(s: &str) -> String {
                 Some('/') => result.push('/'),
                 Some('b') => result.push('\u{0008}'),
                 Some('f') => result.push('\u{000C}'),
+                Some('0') => result.push('\0'),
+                Some('{') => result.push('{'),
+                Some('}') => result.push('}'),
+                Some('$') => result.push('$'),
                 Some('u') => {
-                    let hex: String = chars.by_ref().take(4).collect();
-                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                        if let Some(ch) = char::from_u32(code) {
-                            result.push(ch);
+                    // \u{XXXX} form
+                    if chars.next() == Some('{') {
+                        let hex: String = chars.by_ref().take_while(|c| *c != '}').collect();
+                        if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                            if let Some(ch) = char::from_u32(code) {
+                                result.push(ch);
+                            }
                         }
                     }
                 }
@@ -1124,6 +1241,125 @@ fn unescape_string(s: &str) -> String {
             }
         } else {
             result.push(c);
+        }
+    }
+    result
+}
+
+fn unescape_char_literal(s: &str) -> Option<char> {
+    let mut chars = s.chars();
+    let first = chars.next()?;
+    if first == '\\' {
+        match chars.next()? {
+            'n' => Some('\n'),
+            'r' => Some('\r'),
+            't' => Some('\t'),
+            '\\' => Some('\\'),
+            '\'' => Some('\''),
+            '0' => Some('\0'),
+            'u' => {
+                if chars.next() == Some('{') {
+                    let hex: String = chars.take_while(|c| *c != '}').collect();
+                    u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    } else {
+        if chars.next().is_some() {
+            None // more than one character
+        } else {
+            Some(first)
+        }
+    }
+}
+
+/// Strip indentation from triple-quoted literal strings.
+/// Finds the indentation of the last line (before closing delimiter)
+/// and removes that prefix from all lines.
+fn strip_triple_quote_literal(s: &str) -> String {
+    let lines: Vec<&str> = s.split('\n').collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    // The last line's leading whitespace defines the baseline
+    let last_line = lines.last().unwrap();
+    let baseline = last_line.len() - last_line.trim_start().len();
+    let mut result_lines = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i == 0 && line.trim().is_empty() {
+            continue; // skip leading empty line after opening delimiter
+        }
+        if i == lines.len() - 1 && line.trim().is_empty() {
+            continue; // skip trailing line before closing delimiter
+        }
+        if line.len() >= baseline {
+            result_lines.push(&line[baseline..]);
+        } else {
+            result_lines.push(line.trim_start());
+        }
+    }
+    result_lines.join("\n")
+}
+
+/// Strip indentation from triple-quoted interpolated strings.
+fn strip_triple_quote_indentation(parts: Vec<StringPart>) -> Vec<StringPart> {
+    // For simplicity, find baseline from last text part's last line
+    let mut baseline = 0;
+    if let Some(StringPart::Text(ref text)) = parts.last() {
+        let lines: Vec<&str> = text.split('\n').collect();
+        if let Some(last) = lines.last() {
+            baseline = last.len() - last.trim_start().len();
+        }
+    }
+    if baseline == 0 {
+        return parts;
+    }
+    let mut result = Vec::new();
+    for part in parts {
+        match part {
+            StringPart::Text(text) => {
+                let lines: Vec<&str> = text.split('\n').collect();
+                let mut stripped = Vec::new();
+                for line in &lines {
+                    if line.len() >= baseline {
+                        stripped.push(&line[baseline..]);
+                    } else if line.trim().is_empty() {
+                        stripped.push("");
+                    } else {
+                        stripped.push(line);
+                    }
+                }
+                let joined = stripped.join("\n");
+                if !joined.is_empty() {
+                    result.push(StringPart::Text(joined));
+                }
+            }
+            other => result.push(other),
+        }
+    }
+    // Trim leading/trailing empty text parts from triple-quote boundaries
+    if let Some(StringPart::Text(ref s)) = result.first() {
+        if s.starts_with('\n') {
+            let trimmed = s[1..].to_string();
+            if trimmed.is_empty() {
+                result.remove(0);
+            } else {
+                result[0] = StringPart::Text(trimmed);
+            }
+        }
+    }
+    if let Some(StringPart::Text(ref s)) = result.last() {
+        if s.ends_with('\n') {
+            let len = result.len();
+            let trimmed = s[..s.len() - 1].to_string();
+            if trimmed.is_empty() {
+                result.remove(len - 1);
+            } else {
+                result[len - 1] = StringPart::Text(trimmed);
+            }
         }
     }
     result
@@ -1183,7 +1419,24 @@ fn build_match_pattern(pair: Pair<Rule>) -> Result<MatchPattern, ParseError> {
         }
         Rule::string_literal => {
             let raw = inner.into_inner().next().unwrap().as_str();
-            Ok(MatchPattern::Literal(Literal::String(unescape_string(raw))))
+            Ok(MatchPattern::Literal(Literal::String(unescape_single_string(raw))))
+        }
+        Rule::char_literal => {
+            let raw = inner.into_inner().next().unwrap().as_str();
+            let ch = unescape_char_literal(raw).ok_or_else(|| {
+                ParseError::new(0, 0, format!("invalid char literal in pattern: {}", raw))
+            })?;
+            Ok(MatchPattern::Literal(Literal::Char(ch)))
+        }
+        Rule::interp_string => {
+            // In match patterns, interp_string is used only for non-interpolated doubles
+            let mut text = String::new();
+            for p in inner.into_inner() {
+                if p.as_rule() == Rule::interp_string_text {
+                    text.push_str(&unescape_double_string(p.as_str()));
+                }
+            }
+            Ok(MatchPattern::Literal(Literal::String(text)))
         }
         Rule::identifier => {
             let name = inner.as_str().to_string();

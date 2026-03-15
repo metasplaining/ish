@@ -422,6 +422,7 @@ impl IshVm {
                 Literal::Int(n) => Value::Int(*n),
                 Literal::Float(f) => Value::Float(*f),
                 Literal::String(s) => Value::String(Rc::new(s.clone())),
+                Literal::Char(c) => Value::Char(*c),
                 Literal::Null => Value::Null,
             }),
 
@@ -678,6 +679,12 @@ impl IshVm {
             (Value::String(a), other) => {
                 Ok(Value::String(Rc::new(format!("{}{}", a, other.to_display_string()))))
             }
+            (Value::Char(a), Value::Char(b)) => {
+                Ok(Value::String(Rc::new(format!("{}{}", a, b))))
+            }
+            (Value::Char(a), Value::String(b)) => {
+                Ok(Value::String(Rc::new(format!("{}{}", a, b))))
+            }
             _ => Err(RuntimeError::new(format!(
                 "cannot add {} and {}",
                 lhs.type_name(),
@@ -724,6 +731,7 @@ impl IshVm {
                 .partial_cmp(&(*b as f64))
                 .unwrap_or(std::cmp::Ordering::Equal),
             (Value::String(a), Value::String(b)) => a.cmp(b),
+            (Value::Char(a), Value::Char(b)) => a.cmp(b),
             _ => {
                 return Err(RuntimeError::new(format!(
                     "cannot compare {} and {}",
@@ -1517,5 +1525,103 @@ mod tests {
         let mut vm = IshVm::new();
         let result = vm.run(&program).unwrap();
         assert_eq!(result, Value::Int(42));
+    }
+
+    // ── Char literal / Value::Char tests ────────────────────────────────
+
+    #[test]
+    fn test_char_literal() {
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::char_lit('A'))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Char('A'));
+    }
+
+    #[test]
+    fn test_char_equality() {
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::binary(
+                BinaryOperator::Eq,
+                Expression::char_lit('A'),
+                Expression::char_lit('A'),
+            ))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_char_comparison() {
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::binary(
+                BinaryOperator::Lt,
+                Expression::char_lit('A'),
+                Expression::char_lit('B'),
+            ))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_char_concatenation() {
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::binary(
+                BinaryOperator::Add,
+                Expression::char_lit('H'),
+                Expression::char_lit('i'),
+            ))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::String(Rc::new("Hi".into())));
+    }
+
+    #[test]
+    fn test_char_builtin_from_string() {
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("char"),
+                vec![Expression::string("A")],
+            ))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Char('A'));
+    }
+
+    #[test]
+    fn test_char_builtin_from_int() {
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("char"),
+                vec![Expression::int(65)],
+            ))
+            .build();
+
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Char('A'));
+    }
+
+    #[test]
+    fn test_char_display() {
+        let val = Value::Char('X');
+        assert_eq!(val.to_display_string(), "X");
+    }
+
+    #[test]
+    fn test_char_type_name() {
+        let val = Value::Char('A');
+        assert_eq!(val.type_name(), "char");
     }
 }

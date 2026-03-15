@@ -200,6 +200,10 @@ pub fn expr_to_value(expr: &Expression) -> Value {
                     map.insert("value".to_string(), str_val(s));
                     map.insert("literal_type".to_string(), str_val("string"));
                 }
+                Literal::Char(c) => {
+                    map.insert("value".to_string(), Value::Char(*c));
+                    map.insert("literal_type".to_string(), str_val("char"));
+                }
                 Literal::Null => {
                     map.insert("value".to_string(), Value::Null);
                     map.insert("literal_type".to_string(), str_val("null"));
@@ -512,6 +516,13 @@ pub fn value_to_expr(value: &Value) -> Result<Expression, RuntimeError> {
                         Err(RuntimeError::new("literal string has non-string value"))
                     }
                 }
+                "char" => {
+                    if let Value::Char(c) = val {
+                        Ok(Expression::char_lit(c))
+                    } else {
+                        Err(RuntimeError::new("literal char has non-char value"))
+                    }
+                }
                 "null" => Ok(Expression::null()),
                 _ => Err(RuntimeError::new(format!("unknown literal_type: '{}'", lit_type))),
             }
@@ -763,6 +774,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
                 Value::Int(_) => "int",
                 Value::Float(_) => "float",
                 Value::String(_) => "string",
+                Value::Char(_) => "char",
                 Value::Null => "null",
                 _ => "unknown",
             };

@@ -23,7 +23,7 @@ pub struct Program {
 }
 
 pub enum Expression {
-    Literal(Literal),               // bool, i64, f64, String, null
+    Literal(Literal),               // bool, i64, f64, String, char, null
     Identifier(String),             // variable reference
     BinaryOp { op, left, right },   // arithmetic, comparison, logical
     UnaryOp { op, operand },        // not, negate
@@ -33,6 +33,8 @@ pub enum Expression {
     PropertyAccess { object, property },  // obj.prop
     IndexAccess { object, index },        // list[i]
     Lambda { params, body },        // (x) => { ... }
+    StringInterpolation(Vec<StringPart>), // "hello {name}!"
+    EnvVar(String),                 // $HOME
 }
 
 pub enum Statement {
@@ -63,7 +65,7 @@ pub enum AssignTarget {
     Index { object, index },
 }
 
-pub enum Literal { Bool(bool), Int(i64), Float(f64), String(String), Null }
+pub enum Literal { Bool(bool), Int(i64), Float(f64), String(String), Char(char), Null }
 pub enum BinaryOperator { Add, Sub, Mul, Div, Mod, Eq, NotEq, Lt, Gt, LtEq, GtEq, And, Or }
 pub enum UnaryOperator { Not, Negate }
 pub struct Parameter { pub name: String, pub type_annotation: Option<TypeAnnotation> }
@@ -77,6 +79,8 @@ All types derive `Serialize` + `Deserialize` for JSON round-tripping.
 
 ```rust
 Expression::int(42)               // Literal(Int(42))
+Expression::string("hello")       // Literal(String("hello".into()))
+Expression::char_lit('A')         // Literal(Char('A'))
 Expression::ident("x")            // Identifier("x".into())
 Expression::binary(op, left, right)
 Expression::call(callee, args)

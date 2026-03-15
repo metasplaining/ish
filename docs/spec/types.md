@@ -95,6 +95,13 @@ type Direction = "north" | "south" | "east" | "west"
 let d: Direction = "north"
 ```
 
+**Char literal types** use the `c'...'` syntax:
+
+```ish
+let ch: c'A' = c'A'
+let letter = c'Z'   // letter has type: c'Z'
+```
+
 ### Special Types
 
 ish has four built-in special types representing different kinds of "nothing":

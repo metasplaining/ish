@@ -14,6 +14,7 @@ pub enum Value {
     Int(i64),
     Float(f64),
     String(#[unsafe_ignore_trace] Rc<String>),
+    Char(char),
     Null,
     Object(ObjectRef),
     List(ListRef),
@@ -105,6 +106,7 @@ impl Value {
             Value::Int(0) => false,
             Value::Float(f) => *f != 0.0,
             Value::String(s) => !s.is_empty(),
+            Value::Char(_) => true,
             _ => true,
         }
     }
@@ -115,6 +117,7 @@ impl Value {
             Value::Int(_) => "int",
             Value::Float(_) => "float",
             Value::String(_) => "string",
+            Value::Char(_) => "char",
             Value::Null => "null",
             Value::Object(_) => "object",
             Value::List(_) => "list",
@@ -135,6 +138,7 @@ impl Value {
                 }
             }
             Value::String(s) => s.as_ref().clone(),
+            Value::Char(c) => c.to_string(),
             Value::Null => "null".to_string(),
             Value::Object(obj) => {
                 let map = obj.borrow();
@@ -170,6 +174,7 @@ impl PartialEq for Value {
             (Value::Int(a), Value::Float(b)) => (*a as f64) == *b,
             (Value::Float(a), Value::Int(b)) => *a == (*b as f64),
             (Value::String(a), Value::String(b)) => a == b,
+            (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Null, Value::Null) => true,
             (Value::Object(a), Value::Object(b)) => {
                 let a = a.borrow();

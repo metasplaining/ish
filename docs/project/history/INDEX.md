@@ -17,6 +17,7 @@ Files are named `<isodate>-<topic>.md` for chronological sorting.
 
 | Date | Topic | File |
 |------|-------|------|
+| 2026-03-15 | String syntax design and implementation | [2026-03-15-string-syntax.md](2026-03-15-string-syntax.md) |
 | 2026-03-14 | Language syntax design | [2026-03-14-language-syntax.md](2026-03-14-language-syntax.md) |
 | 2026-03-14 | Assurance Ledger design | [2026-03-14-assurance-ledger.md](2026-03-14-assurance-ledger.md) |
 | 2026-03-11 | Error handling implementation | [2026-03-11-error-handling.md](2026-03-11-error-handling.md) |

@@ -107,7 +107,7 @@ defer_stmt = { "defer" ~ (block | expression_stmt) }
 // --- Match ---
 match_stmt = { "match" ~ expression ~ "{" ~ NEWLINE* ~ (match_arm ~ (("," | NEWLINE) ~ NEWLINE* ~ match_arm)* ~ ("," | NEWLINE)? ~ NEWLINE*)? ~ "}" }
 match_arm = { match_pattern ~ "=>" ~ (block | expression_stmt) }
-match_pattern = { "_" | float_literal | integer_literal | boolean_literal | null_literal | string_literal | identifier }
+match_pattern = { "_" | float_literal | integer_literal | boolean_literal | null_literal | char_literal | interp_string | string_literal | identifier }
 
 expression_stmt = { expression ~ &(NEWLINE | ";" | EOI | "}") }
 
@@ -192,7 +192,14 @@ primary = {
     integer_literal |
     boolean_literal |
     null_literal |
-    f_string |
+    extended_triple_double_string |
+    extended_triple_single_string |
+    extended_double_string |
+    extended_single_string |
+    triple_double_string |
+    triple_single_string |
+    char_literal |
+    interp_string |
     string_literal |
     command_substitution |
     env_var |
@@ -204,7 +211,7 @@ lambda = { "(" ~ param_list? ~ ")" ~ "=>" ~ (block | expression) }
 
 // --- Object and List Literals ---
 object_literal = { "{" ~ NEWLINE* ~ (object_pair ~ (object_sep ~ object_pair)* ~ object_sep?)? ~ NEWLINE* ~ "}" }
-object_pair = { (identifier | string_literal) ~ ":" ~ expression }
+object_pair = { (identifier | string_literal | interp_string) ~ ":" ~ expression }
 object_sep = _{ ("," | NEWLINE)+ }
 
 list_literal = { "[" ~ NEWLINE* ~ (expression ~ ("," ~ NEWLINE* ~ expression)* ~ ","? ~ NEWLINE*)? ~ "]" }
@@ -221,19 +228,51 @@ float_literal = @{
 boolean_literal = { "true" | "false" }
 null_literal = { "null" }
 
-string_literal = ${ "\"" ~ string_inner ~ "\"" }
-string_inner = @{ string_char* }
-string_char = {
-    !("\"" | "\\") ~ ANY |
-    "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t") |
-    "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+string_literal = ${ "'" ~ single_string_inner ~ "'" }
+single_string_inner = @{ single_string_char* }
+single_string_char = {
+    !("'" | "\\") ~ ANY |
+    "\\" ~ ANY
 }
 
-// --- F-strings (interpolated strings) ---
-f_string = ${ "f\"" ~ f_string_part* ~ "\"" }
-f_string_part = _{ f_string_interp | f_string_text }
-f_string_text = @{ (!"\"" ~ !"{" ~ ANY)+ }
-f_string_interp = !{ "{" ~ expression ~ "}" }
+// --- Interpolated strings (double-quoted) ---
+interp_string = ${ "\"" ~ interp_string_part* ~ "\"" }
+interp_string_part = _{ interp_string_interp | interp_string_env | interp_string_text }
+interp_string_text = @{ (!("\"" | "{" | "$" | "\\") ~ ANY | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "0" | "{" | "}" | "$") | "\\" ~ ("u" ~ "{" ~ ASCII_HEX_DIGIT{1,6} ~ "}"))+ }
+interp_string_interp = !{ "{" ~ expression ~ "}" }
+interp_string_env = !{ "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// --- Triple-quoted strings ---
+triple_double_string = ${ "\"\"\"" ~ NEWLINE? ~ triple_double_part* ~ "\"\"\"" }
+triple_double_part = _{ triple_double_interp | triple_double_env | triple_double_text }
+triple_double_text = @{ (!("\"\"\"" | "{" | "$") ~ ANY)+ }
+triple_double_interp = !{ "{" ~ expression ~ "}" }
+triple_double_env = !{ "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+triple_single_string = ${ "'''" ~ NEWLINE? ~ triple_single_inner ~ "'''" }
+triple_single_inner = @{ (!"'''" ~ ANY)* }
+
+// --- Char literal ---
+char_literal = ${ "c'" ~ char_literal_inner ~ "'" }
+char_literal_inner = @{
+    !("'" | "\\") ~ ANY |
+    "\\" ~ ("'" | "\\" | "n" | "r" | "t" | "0") |
+    "\\" ~ ("u" ~ "{" ~ ASCII_HEX_DIGIT{1,6} ~ "}")
+}
+
+// --- Extended delimiter strings ---
+// Uses ~ prefix to avoid conflict with # line comments.
+extended_double_string = ${ "~\"" ~ extended_double_inner ~ "\"~" }
+extended_double_inner = @{ (!"\"~" ~ ANY)* }
+
+extended_single_string = ${ "~'" ~ extended_single_inner ~ "'~" }
+extended_single_inner = @{ (!"'~" ~ ANY)* }
+
+extended_triple_double_string = ${ "~\"\"\"" ~ NEWLINE? ~ extended_triple_double_inner ~ "\"\"\"~" }
+extended_triple_double_inner = @{ (!"\"\"\"~" ~ ANY)* }
+
+extended_triple_single_string = ${ "~'''" ~ NEWLINE? ~ extended_triple_single_inner ~ "'''~" }
+extended_triple_single_inner = @{ (!"'''~" ~ ANY)* }
 
 // --- Shell integration ---
 // Shell commands are the fallback: bare-word invocations when no language keyword matches.
@@ -260,14 +299,17 @@ shell_word = {
     command_substitution |
     env_var |
     shell_quoted_string |
+    shell_single_string |
     shell_bare_word
 }
 command_substitution = { "$(" ~ NEWLINE* ~ (statement ~ (stmt_sep ~ statement)* ~ stmt_sep?)? ~ ")" }
 env_var = @{ "$" ~ "{" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* ~ "}" | "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 shell_quoted_string = ${ "\"" ~ shell_quoted_inner ~ "\"" }
 shell_quoted_inner = @{ (!"\"" ~ !"\n" ~ ANY)* }
+shell_single_string = ${ "'" ~ shell_single_inner ~ "'" }
+shell_single_inner = @{ (!"'" ~ !"\n" ~ ANY)* }
 // Bare word: any non-whitespace, non-special characters (includes globs, flags, paths)
-shell_bare_word = @{ (!(WHITESPACE | NEWLINE | ";" | "|" | "&" | ">" | "\"" | "$(" | "#" | "//" | "{" | "}" | "(" | ")") ~ ANY)+ }
+shell_bare_word = @{ (!(WHITESPACE | NEWLINE | ";" | "|" | "&" | ">" | "\"" | "'" | "$(" | "#" | "//" | "{" | "}" | "(" | ")") ~ ANY)+ }
 
 // --- Identifiers ---
 // Keywords are excluded via the negative lookahead.

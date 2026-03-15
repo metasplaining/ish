@@ -594,6 +594,44 @@ fn register_conversion(env: &Environment) {
             }
         }),
     );
+
+    env.define(
+        "char".into(),
+        new_builtin("char", |args| {
+            if args.len() != 1 {
+                return Err(RuntimeError::new("char expects 1 argument"));
+            }
+            match &args[0] {
+                Value::String(s) => {
+                    let mut chars = s.chars();
+                    if let Some(c) = chars.next() {
+                        if chars.next().is_none() {
+                            Ok(Value::Char(c))
+                        } else {
+                            Err(RuntimeError::new("char expects a single-character string"))
+                        }
+                    } else {
+                        Err(RuntimeError::new("char expects a non-empty string"))
+                    }
+                }
+                Value::Int(n) => {
+                    let code = *n as u32;
+                    match char::from_u32(code) {
+                        Some(c) => Ok(Value::Char(c)),
+                        None => Err(RuntimeError::new(format!(
+                            "invalid Unicode code point: {}",
+                            n
+                        ))),
+                    }
+                }
+                Value::Char(c) => Ok(Value::Char(*c)),
+                _ => Err(RuntimeError::new(format!(
+                    "cannot convert {} to char",
+                    args[0].type_name()
+                ))),
+            }
+        }),
+    );
 }
 
 // ── Error Handling ──────────────────────────────────────────────────────────

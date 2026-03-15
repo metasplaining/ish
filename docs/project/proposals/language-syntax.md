@@ -484,29 +484,13 @@ let raw = r"no \escapes \here"             // raw string (no escape processing)
 ### Decisions
 
 **Decision:** String quote styles — double-only, or both single and double?
---> We need to explore this more deeply in a follow on proposal.
-1. It is important to support string literals that contain the ordinary quote characters without escapes.
-2. It is important to support multiline strings.
-3. It is important to support string interpolation.
-4. In shell mode, it is important to support unquoted strings.
-5. It would be nice to have as much consistency as possible between programming mode and shell mode.
-
-I generally like bash strings, where you can have unescaped single quotes inside of double quotes or vice versa.
-I also generally like syntaxes where you can choose your own multi-character delimiter, and the string doesn't end until that delimiter is seen.
-We need some syntax for chars, but it can be some clunky syntax that doesn't steal one of the useful quote characters, since char literals are so rare.
-We need to be able to support all combinations of (interpolated or not)x(multiline or not)x(does not interfere with the literal quotes that need to be in the string.)
-String interpolation needs to support both ish variables and environment variables in both shell mode and command line mode.
-And of course we want to do all that while keeping the syntax both clean and conventional.
-
-We should explore what all the other languages do, not just our preferred languages, and how well received string handling is in those languages.
-
-Generate an RFP for all of this, and we will address it in a follow-on proposal.  For this phase, just support double-only.
+--> **Addressed in the [string syntax proposal](string-syntax.md).** Shell convention adopted: `'...'` for literal strings, `"..."` for interpolating strings, `"""..."""` and `'''...'''` for multiline, `c'A'` for char literals, `~"..."~` for extended delimiters.
 
 **Decision:** Interpolation syntax — `f"...{expr}..."`, `` `...${expr}...` ``, or `"...{expr}..."`?
---> TBD
+--> **Addressed in the [string syntax proposal](string-syntax.md).** Implicit interpolation in `"..."` with `{expr}` for ish expressions and `$VAR` for environment variables.
 
 **Decision:** Raw strings — `r"..."` (Rust-style)?
---> TBD
+--> **Addressed in the [string syntax proposal](string-syntax.md).** No `r"..."` prefix — single-quoted strings serve as literal (raw) strings, and extended delimiters (`~"..."~`) handle edge cases.
 
 ---
 

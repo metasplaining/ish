@@ -109,12 +109,83 @@ nums[0]
 
 ## Strings
 
-Double-quoted strings are the primary string literal. String interpolation and raw strings are planned but their exact syntax is deferred to a follow-on proposal. `char` literals use a syntax to be determined (not single quotes, to keep single quotes available for strings in a future phase).
+ish uses **shell-convention** quoting: single-quoted strings are literal (no interpolation), double-quoted strings support interpolation and escapes. This matches the universal shell expectation that `'...'` is raw and `"..."` processes special characters.
+
+The full string syntax was designed in the [string syntax proposal](../project/proposals/string-syntax.md).
+
+### Single-Quoted Strings (Literal)
+
+Single-quoted strings are literal — no interpolation, no escape processing except `\\` and `\'`:
+
+```ish
+let raw = 'no {interpolation} or $expansion here'
+let escaped = 'it\'s fine'
+let backslash = 'path\\to\\file'
+let regex = '(\d+)\s+'
+```
+
+### Double-Quoted Strings (Interpolating)
+
+Double-quoted strings support ish expression interpolation with `{expr}` and environment variable expansion with `$VAR`:
 
 ```ish
 let name = "Alice"
-let greeting = "Hello, " + name + "!"
+let greeting = "Hello, {name}!"              // -> "Hello, Alice!"
+let calc = "Result: {2 + 2}"                 // -> "Result: 4"
+let home = "Home is $HOME"                   // -> "Home is /home/alice"
+let path = "Path is: ${PATH}"                // -> "Path is: /usr/bin:..."
 ```
+
+**Escape sequences** in double-quoted strings: `\n` (newline), `\t` (tab), `\r` (carriage return), `\\` (backslash), `\"` (double quote), `\{` (literal brace), `\}` (literal brace), `\$` (literal dollar), `\0` (null), `\u{XXXX}` (Unicode scalar).
+
+### Triple-Quoted Strings (Multiline)
+
+Triple-quoted strings support multiline content with automatic indentation stripping based on the closing delimiter's position:
+
+```ish
+let sql = """
+    SELECT *
+    FROM users
+    WHERE active = true
+    """
+
+let template = '''
+    No {interpolation} or $expansion here.
+    Everything is literal.
+    '''
+```
+
+`"""..."""` supports interpolation (same as `"..."`). `'''...'''` is literal (same as `'...'`).
+
+### Char Literals
+
+Char literals use the `c'...'` prefix syntax:
+
+```ish
+let ch = c'A'
+let newline = c'\n'
+let null_char = c'\0'
+```
+
+The `char()` builtin constructs a char from a single-character string or Unicode code point:
+
+```ish
+let c = char("A")     // from string
+let c = char(65)      // from code point
+```
+
+### Extended Delimiter Strings
+
+For strings containing quotes or other special characters, extended delimiters wrap the string with `~`:
+
+```ish
+let s = ~"She said "hello" and it's fine"~
+let t = ~'Contains both "quotes" and apostrophes'~
+```
+
+Extended delimiters are available for all four quote styles: `~"..."~`, `~'...'~`, `~"""..."""~`, `~'''...'''~`. Content inside extended delimiters is verbatim — no escape processing.
+
+Extended delimiters are not available in shell mode. If you need an extended delimiter string as a shell argument, assign it to a variable first and interpolate it.
 
 ---
 
