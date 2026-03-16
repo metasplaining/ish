@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::process::{Command, Stdio};
 
 use ish_ast::*;
 
@@ -376,9 +377,8 @@ impl IshVm {
                 Ok(ControlFlow::None)
             }
 
-            Statement::ShellCommand { .. } => {
-                // Shell command execution is not supported in the tree-walking interpreter
-                Err(RuntimeError::new("Shell commands are not supported in this execution mode"))
+            Statement::ShellCommand { command, args, pipes, redirections, background: _ } => {
+                self.exec_shell_command(command, args, pipes, redirections, env)
             }
 
             Statement::Annotated { inner, .. } => {
@@ -394,6 +394,10 @@ impl IshVm {
             Statement::Match { .. } => {
                 // Match not yet implemented in interpreter
                 Ok(ControlFlow::None)
+            }
+
+            Statement::Incomplete { kind } => {
+                Err(RuntimeError::new(format!("incomplete input: {:?}", kind)))
             }
         }
     }
@@ -561,17 +565,252 @@ impl IshVm {
                 Ok(Value::String(Rc::new(result)))
             }
 
-            Expression::CommandSubstitution(_) => {
-                Err(RuntimeError::new("Command substitution is not supported in this execution mode"))
+            Expression::CommandSubstitution(inner) => {
+                // Execute the inner statement and capture its stdout output
+                match inner.as_ref() {
+                    Statement::ShellCommand { command, args, pipes, redirections, background: _ } => {
+                        let resolved_args = self.resolve_shell_args(args, env)?;
+                        let output = self.run_command_pipeline(command, &resolved_args, pipes, redirections, env, true)?;
+                        Ok(Value::String(Rc::new(output.trim_end_matches('\n').to_string())))
+                    }
+                    _ => {
+                        // Execute as normal statement, capture result
+                        match self.exec_statement(inner, env)? {
+                            ControlFlow::ExprValue(v) => Ok(v),
+                            ControlFlow::Return(v) => Ok(v),
+                            _ => Ok(Value::Null),
+                        }
+                    }
+                }
             }
 
             Expression::EnvVar(name) => {
-                // Look up environment variable
-                match std::env::var(name) {
-                    Ok(val) => Ok(Value::String(Rc::new(val))),
-                    Err(_) => Ok(Value::Null),
+                if name == "?" {
+                    // $? — last exit code, stored in the VM
+                    match env.get("__ish_last_exit_code") {
+                        Ok(v) => Ok(v),
+                        Err(_) => Ok(Value::Int(0)),
+                    }
+                } else {
+                    match std::env::var(name) {
+                        Ok(val) => Ok(Value::String(Rc::new(val))),
+                        Err(_) => Ok(Value::Null),
+                    }
                 }
             }
+
+            Expression::Incomplete { kind } => {
+                Err(RuntimeError::new(format!("incomplete expression: {:?}", kind)))
+            }
+        }
+    }
+
+    // ── Shell command execution ─────────────────────────────────────────────
+
+    fn exec_shell_command(
+        &mut self,
+        command: &str,
+        args: &[ShellArg],
+        pipes: &[ShellPipeline],
+        redirections: &[Redirection],
+        env: &Environment,
+    ) -> Result<ControlFlow, RuntimeError> {
+        let resolved_args = self.resolve_shell_args(args, env)?;
+
+        // Check for builtins
+        match command {
+            "cd" => {
+                let dir = resolved_args.first().map(|s| s.as_str()).unwrap_or("~");
+                let target = if dir == "~" {
+                    std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
+                } else {
+                    dir.to_string()
+                };
+                match std::env::set_current_dir(&target) {
+                    Ok(()) => {
+                        env.define("__ish_last_exit_code".to_string(), Value::Int(0));
+                        Ok(ControlFlow::None)
+                    }
+                    Err(e) => {
+                        env.define("__ish_last_exit_code".to_string(), Value::Int(1));
+                        Err(RuntimeError::new(format!("cd: {}: {}", target, e)))
+                    }
+                }
+            }
+            "pwd" => {
+                match std::env::current_dir() {
+                    Ok(p) => {
+                        let path_str = p.display().to_string();
+                        println!("{}", path_str);
+                        env.define("__ish_last_exit_code".to_string(), Value::Int(0));
+                        Ok(ControlFlow::ExprValue(Value::String(Rc::new(path_str))))
+                    }
+                    Err(e) => {
+                        env.define("__ish_last_exit_code".to_string(), Value::Int(1));
+                        Err(RuntimeError::new(format!("pwd: {}", e)))
+                    }
+                }
+            }
+            "exit" => {
+                let code: i32 = resolved_args
+                    .first()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                std::process::exit(code);
+            }
+            _ => {
+                // External command
+                let output = self.run_command_pipeline(command, &resolved_args, pipes, redirections, env, false)?;
+                if !output.is_empty() {
+                    Ok(ControlFlow::ExprValue(Value::String(Rc::new(output))))
+                } else {
+                    Ok(ControlFlow::None)
+                }
+            }
+        }
+    }
+
+    fn resolve_shell_args(
+        &mut self,
+        args: &[ShellArg],
+        env: &Environment,
+    ) -> Result<Vec<String>, RuntimeError> {
+        let mut resolved = Vec::new();
+        for arg in args {
+            match arg {
+                ShellArg::Bare(s) => resolved.push(s.clone()),
+                ShellArg::Quoted(s) => resolved.push(s.clone()),
+                ShellArg::Glob(pattern) => {
+                    // Expand glob pattern using standard library
+                    match glob_expand(pattern) {
+                        Some(paths) if !paths.is_empty() => resolved.extend(paths),
+                        _ => resolved.push(pattern.clone()), // No matches → pass literally
+                    }
+                }
+                ShellArg::EnvVar(name) => {
+                    if name == "?" {
+                        match env.get("__ish_last_exit_code") {
+                            Ok(Value::Int(code)) => resolved.push(code.to_string()),
+                            _ => resolved.push("0".to_string()),
+                        }
+                    } else {
+                        match std::env::var(name) {
+                            Ok(val) => resolved.push(val),
+                            Err(_) => resolved.push(String::new()),
+                        }
+                    }
+                }
+                ShellArg::CommandSub(inner) => {
+                    match inner.as_ref() {
+                        Statement::ShellCommand { command, args, pipes, redirections, background: _ } => {
+                            let sub_args = self.resolve_shell_args(args, env)?;
+                            let output = self.run_command_pipeline(command, &sub_args, pipes, redirections, env, true)?;
+                            resolved.push(output.trim_end_matches('\n').to_string());
+                        }
+                        _ => {
+                            match self.exec_statement(inner, env)? {
+                                ControlFlow::ExprValue(v) => resolved.push(format!("{}", v)),
+                                ControlFlow::Return(v) => resolved.push(format!("{}", v)),
+                                _ => resolved.push(String::new()),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(resolved)
+    }
+
+    fn run_command_pipeline(
+        &mut self,
+        command: &str,
+        args: &[String],
+        pipes: &[ShellPipeline],
+        redirections: &[Redirection],
+        env: &Environment,
+        capture: bool,
+    ) -> Result<String, RuntimeError> {
+        // Build the first command
+        let mut cmd = Command::new(command);
+        cmd.args(args);
+
+        if pipes.is_empty() {
+            // Single command — handle redirections
+            if capture {
+                cmd.stdout(Stdio::piped());
+                cmd.stderr(Stdio::piped());
+            }
+
+            apply_redirections(&mut cmd, redirections)?;
+
+            let output = cmd.output().map_err(|e| {
+                RuntimeError::new(format!("{}: {}", command, e))
+            })?;
+
+            let exit_code = output.status.code().unwrap_or(-1) as i64;
+            env.define("__ish_last_exit_code".to_string(), Value::Int(exit_code));
+
+            if capture {
+                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+            } else {
+                Ok(String::new())
+            }
+        } else {
+            // Pipeline: chain commands via stdin/stdout
+            cmd.stdout(Stdio::piped());
+            let mut child = cmd.spawn().map_err(|e| {
+                RuntimeError::new(format!("{}: {}", command, e))
+            })?;
+
+            let mut prev_stdout = child.stdout.take();
+
+            for (i, pipe) in pipes.iter().enumerate() {
+                let is_last = i == pipes.len() - 1;
+                let pipe_args = self.resolve_shell_args(&pipe.args, env)?;
+                let mut next_cmd = Command::new(&pipe.command);
+                next_cmd.args(&pipe_args);
+
+                if let Some(stdout) = prev_stdout.take() {
+                    next_cmd.stdin(stdout);
+                }
+
+                if !is_last || capture {
+                    next_cmd.stdout(Stdio::piped());
+                }
+
+                if is_last {
+                    apply_redirections(&mut next_cmd, redirections)?;
+                }
+
+                let mut next_child = next_cmd.spawn().map_err(|e| {
+                    RuntimeError::new(format!("{}: {}", pipe.command, e))
+                })?;
+
+                prev_stdout = next_child.stdout.take();
+
+                if is_last {
+                    let output = next_child.wait_with_output().map_err(|e| {
+                        RuntimeError::new(format!("{}: {}", pipe.command, e))
+                    })?;
+                    let exit_code = output.status.code().unwrap_or(-1) as i64;
+                    env.define("__ish_last_exit_code".to_string(), Value::Int(exit_code));
+
+                    // Wait for the first command too
+                    let _ = child.wait();
+
+                    if capture {
+                        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+                    }
+                    return Ok(String::new());
+                } else {
+                    // Intermediate — will be consumed by next stage
+                    child = next_child;
+                }
+            }
+
+            // Wait for all processes
+            let _ = child.wait();
+            Ok(String::new())
         }
     }
 
@@ -748,6 +987,111 @@ impl Default for IshVm {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ── Shell helpers ───────────────────────────────────────────────────────────
+
+fn apply_redirections(cmd: &mut Command, redirections: &[Redirection]) -> Result<(), RuntimeError> {
+    use std::fs::{File, OpenOptions};
+    for redir in redirections {
+        match redir.kind {
+            RedirectKind::StdoutWrite => {
+                let f = File::create(&redir.target).map_err(|e| {
+                    RuntimeError::new(format!("redirect: {}: {}", redir.target, e))
+                })?;
+                cmd.stdout(f);
+            }
+            RedirectKind::StdoutAppend => {
+                let f = OpenOptions::new().create(true).append(true).open(&redir.target).map_err(|e| {
+                    RuntimeError::new(format!("redirect: {}: {}", redir.target, e))
+                })?;
+                cmd.stdout(f);
+            }
+            RedirectKind::StderrWrite => {
+                let f = File::create(&redir.target).map_err(|e| {
+                    RuntimeError::new(format!("redirect: {}: {}", redir.target, e))
+                })?;
+                cmd.stderr(f);
+            }
+            RedirectKind::StderrAndStdout => {
+                // 2>&1 — merge stderr into stdout (Stdio::piped or inherit)
+                cmd.stderr(Stdio::inherit());
+            }
+            RedirectKind::AllWrite => {
+                let f = File::create(&redir.target).map_err(|e| {
+                    RuntimeError::new(format!("redirect: {}: {}", redir.target, e))
+                })?;
+                let f2 = f.try_clone().map_err(|e| {
+                    RuntimeError::new(format!("redirect: {}", e))
+                })?;
+                cmd.stdout(f);
+                cmd.stderr(f2);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn glob_expand(pattern: &str) -> Option<Vec<String>> {
+    // Simple glob expansion using std::fs
+    let path = std::path::Path::new(pattern);
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let file_pattern = path.file_name()?.to_str()?;
+
+    // Only handle patterns with * or ?
+    if !file_pattern.contains('*') && !file_pattern.contains('?') {
+        return None;
+    }
+
+    let regex_pattern = file_pattern
+        .replace('.', "\\.")
+        .replace('*', ".*")
+        .replace('?', ".");
+
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut matches = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_str()?.to_string();
+        // Simple regex match using the converted pattern
+        if simple_glob_match(&regex_pattern, &name) {
+            let full = if dir == std::path::Path::new(".") {
+                name
+            } else {
+                format!("{}/{}", dir.display(), name)
+            };
+            matches.push(full);
+        }
+    }
+    matches.sort();
+    Some(matches)
+}
+
+fn simple_glob_match(pattern: &str, text: &str) -> bool {
+    // Convert glob-derived regex-like pattern to a match.
+    // This is a simple implementation that handles .* and . patterns.
+    let parts: Vec<&str> = pattern.split(".*").collect();
+    if parts.len() == 1 {
+        // No wildcard, exact match or single-char wildcards
+        if pattern.len() != text.len() {
+            return false;
+        }
+        return pattern.chars().zip(text.chars()).all(|(p, t)| p == t || p == '.');
+    }
+    let mut remaining = text;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if let Some(pos) = remaining.find(part) {
+            if i == 0 && pos != 0 {
+                return false; // First segment must be at start
+            }
+            remaining = &remaining[pos + part.len()..];
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

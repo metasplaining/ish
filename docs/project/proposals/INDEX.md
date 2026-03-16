@@ -21,6 +21,12 @@ Structured proposals generated from prompt files using the `/propose` skill. Eac
 | 2026-03-11 | Error Handling | accepted | [error-handling.md](error-handling.md) |
 | 2026-03-14 | Language Syntax | accepted | [language-syntax.md](language-syntax.md) |
 | 2026-03-15 | String Syntax | accepted | [string-syntax.md](string-syntax.md) |
+| 2026-03-15 | Shell Integration | proposal | [shell-integration.md](shell-integration.md) |
+| 2026-03-15 | Shell Implementation | proposal | [shell-implementation.md](shell-implementation.md) |
+| 2026-03-15 | Shell Construction | proposal | [shell-construction.md](shell-construction.md) |
+| 2026-03-15 | Shell Build | proposal | [shell-build.md](shell-build.md) |
+| 2026-03-15 | Shell Build II | proposal | [shell-build-ii.md](shell-build-ii.md) |
+| 2026-03-15 | Shell Build III | proposal | [shell-build-iii.md](shell-build-iii.md) |
 
 ---
 

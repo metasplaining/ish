@@ -4,7 +4,7 @@ pub mod error;
 use pest::Parser;
 use pest_derive::Parser;
 
-use ish_ast::Program;
+use ish_ast::{Program, Statement, IncompleteKind};
 use error::ParseError;
 
 #[derive(Parser)]
@@ -12,10 +12,33 @@ use error::ParseError;
 struct IshParser;
 
 /// Parse ish source text into an AST Program.
+///
+/// Parser-matches-everything philosophy: always returns `Ok(Program)`.
+/// If the input is incomplete or malformed, the AST contains `Incomplete`
+/// nodes rather than returning parse errors.
 pub fn parse(input: &str) -> Result<Program, Vec<ParseError>> {
-    let pairs = IshParser::parse(Rule::program, input).map_err(|e| {
-        vec![ParseError::new(0, input.len(), e.to_string())]
-    })?;
+    let pairs = match IshParser::parse(Rule::program, input) {
+        Ok(pairs) => pairs,
+        Err(_) => {
+            // Parser failed — wrap as an incomplete block statement.
+            // This makes the parser always succeed from the caller's perspective.
+            return Ok(Program {
+                statements: vec![Statement::Incomplete {
+                    kind: IncompleteKind::Block,
+                }],
+            });
+        }
+    };
 
-    ast_builder::build_program(pairs)
+    match ast_builder::build_program(pairs) {
+        Ok(program) => Ok(program),
+        Err(_) => {
+            // AST builder failed — wrap as incomplete
+            Ok(Program {
+                statements: vec![Statement::Incomplete {
+                    kind: IncompleteKind::Block,
+                }],
+            })
+        }
+    }
 }

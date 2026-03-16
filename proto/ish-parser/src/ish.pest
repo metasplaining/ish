@@ -10,11 +10,13 @@ WHITESPACE = _{ " " | "\t" | "\r" }
 
 COMMENT = _{
     line_comment |
-    block_comment
+    block_comment |
+    unterminated_block_comment
 }
 
 line_comment = @{ ("//" | "#") ~ (!NEWLINE ~ ANY)* }
 block_comment = @{ "/*" ~ (block_comment | (!"*/" ~ ANY))* ~ "*/" }
+unterminated_block_comment = @{ "/*" ~ (block_comment | (!"*/" ~ ANY))* ~ EOI }
 
 // --- Top-level ---
 program = { SOI ~ NEWLINE* ~ (statement ~ (stmt_sep ~ statement)* ~ stmt_sep?)? ~ EOI }
@@ -42,24 +44,29 @@ statement = _{
     mod_stmt |
     assign_stmt |
     expression_stmt |
-    shell_command
+    shell_command |
+    unterminated_block
 }
 
 // --- Annotations and Assurance Ledger ---
 annotated_stmt = { (annotation ~ NEWLINE*)+ ~ (fn_decl | let_stmt | type_alias | mod_stmt) }
 annotation = { standard_annotation | entry_annotation }
 standard_annotation = { "@standard[" ~ annotation_args ~ "]" }
+unterminated_standard_annotation = { "@standard[" ~ annotation_args? ~ EOI }
 entry_annotation = { "@[" ~ entry_item ~ ("," ~ entry_item)* ~ ","? ~ "]" }
+unterminated_entry_annotation = { "@[" ~ (entry_item ~ ("," ~ entry_item)* ~ ","?)? ~ EOI }
 entry_item = { entry_item_name ~ ("(" ~ entry_value ~ ")")? }
 entry_item_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 entry_value = @{ (!")" ~ ANY)+ }
 annotation_args = @{ (!"]" ~ ANY)+ }
 
 standard_def = { "standard" ~ identifier ~ ("extends" ~ identifier)? ~ "[" ~ NEWLINE* ~ (feature_spec ~ ("," ~ NEWLINE* ~ feature_spec)* ~ ","? ~ NEWLINE*)? ~ "]" }
+unterminated_standard_def = { "standard" ~ identifier ~ ("extends" ~ identifier)? ~ "[" ~ NEWLINE* ~ (feature_spec ~ ("," ~ NEWLINE* ~ feature_spec)* ~ ","? ~ NEWLINE*)? ~ EOI }
 feature_spec = { identifier ~ ("(" ~ feature_param ~ ("," ~ feature_param)* ~ ")")? }
 feature_param = @{ (!")" ~ !"," ~ ANY)+ }
 
 entry_type_def = { "entry" ~ "type" ~ identifier ~ "{" ~ NEWLINE* ~ (entry_type_field ~ ("," ~ NEWLINE* ~ entry_type_field)* ~ ","? ~ NEWLINE*)? ~ "}" }
+unterminated_entry_type_def = { "entry" ~ "type" ~ identifier ~ "{" ~ NEWLINE* ~ (entry_type_field ~ ("," ~ NEWLINE* ~ entry_type_field)* ~ ","? ~ NEWLINE*)? ~ EOI }
 entry_type_field = { identifier ~ ":" ~ expression }
 
 // --- Visibility ---
@@ -77,11 +84,13 @@ fn_decl = {
     pub_modifier? ~ "fn" ~ identifier ~ generic_params? ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_annotation)? ~ block
 }
 generic_params = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
+unterminated_generic_params = { "<" ~ (identifier ~ ("," ~ identifier)*)? ~ EOI }
 
 param_list = { param ~ ("," ~ param)* ~ ","? }
 param = { identifier ~ (":" ~ type_annotation)? ~ ("=" ~ expression)? }
 
 block = { "{" ~ NEWLINE* ~ (statement ~ (stmt_sep ~ statement)* ~ stmt_sep?)? ~ "}" }
+unterminated_block = { "{" ~ NEWLINE* ~ (statement ~ (stmt_sep ~ statement)* ~ stmt_sep?)? ~ EOI }
 
 if_stmt = {
     "if" ~ expression ~ block ~ (NEWLINE* ~ "else" ~ (if_stmt | block))?
@@ -98,14 +107,17 @@ throw_stmt = { "throw" ~ expression }
 
 try_catch = { "try" ~ block ~ catch_clause+ ~ ("finally" ~ block)? }
 catch_clause = { "catch" ~ "(" ~ identifier ~ (":" ~ type_annotation)? ~ ")" ~ block }
+unterminated_catch_param = { "catch" ~ "(" ~ identifier? ~ (":" ~ type_annotation)? ~ EOI }
 
 with_block = { "with" ~ "(" ~ resource_binding ~ ("," ~ resource_binding)* ~ ","? ~ ")" ~ block }
+unterminated_with_resources = { "with" ~ "(" ~ (resource_binding ~ ("," ~ resource_binding)* ~ ","?)? ~ EOI }
 resource_binding = { identifier ~ "=" ~ expression }
 
 defer_stmt = { "defer" ~ (block | expression_stmt) }
 
 // --- Match ---
 match_stmt = { "match" ~ expression ~ "{" ~ NEWLINE* ~ (match_arm ~ (("," | NEWLINE) ~ NEWLINE* ~ match_arm)* ~ ("," | NEWLINE)? ~ NEWLINE*)? ~ "}" }
+unterminated_match = { "match" ~ expression ~ "{" ~ NEWLINE* ~ (match_arm ~ (("," | NEWLINE) ~ NEWLINE* ~ match_arm)* ~ ("," | NEWLINE)? ~ NEWLINE*)? ~ EOI }
 match_arm = { match_pattern ~ "=>" ~ (block | expression_stmt) }
 match_pattern = { "_" | float_literal | integer_literal | boolean_literal | null_literal | char_literal | interp_string | string_literal | identifier }
 
@@ -125,12 +137,16 @@ primary_type = {
 }
 simple_type = { "null" | identifier }
 generic_type = { identifier ~ "<" ~ type_annotation ~ ("," ~ type_annotation)* ~ ">" }
+unterminated_generic_type = { identifier ~ "<" ~ (type_annotation ~ ("," ~ type_annotation)*)? ~ EOI }
 list_type = { identifier ~ "[" ~ type_annotation ~ "]" }
 object_type = { "{" ~ NEWLINE* ~ (object_type_field ~ ("," ~ NEWLINE* ~ object_type_field)* ~ ","?)? ~ NEWLINE* ~ "}" }
+unterminated_object_type = { "{" ~ NEWLINE* ~ (object_type_field ~ ("," ~ NEWLINE* ~ object_type_field)* ~ ","?)? ~ NEWLINE* ~ EOI }
 object_type_field = { identifier ~ "?"? ~ ":" ~ type_annotation }
 function_type = { "fn" ~ "(" ~ type_list? ~ ")" ~ "->" ~ type_annotation }
+unterminated_function_type = { "fn" ~ "(" ~ type_list? ~ EOI }
 type_list = { type_annotation ~ ("," ~ type_annotation)* ~ ","? }
 tuple_type = { "(" ~ type_annotation ~ ("," ~ type_annotation)+ ~ ","? ~ ")" }
+unterminated_tuple_type = { "(" ~ (type_annotation ~ ("," ~ type_annotation)*)? ~ EOI }
 
 // --- Type Alias ---
 type_alias = { pub_modifier? ~ "type" ~ identifier ~ "=" ~ type_annotation }
@@ -178,10 +194,12 @@ postfix_op = _{
     try_op
 }
 call_args = { "(" ~ arg_list? ~ ")" }
+unterminated_call_args = { "(" ~ (expression ~ ("," ~ expression)* ~ ","?)? ~ EOI }
 arg_list = { expression ~ ("," ~ expression)* ~ ","? }
 try_op = { "?" }
 dot_access = { "." ~ identifier }
 index_access = { "[" ~ expression ~ "]" }
+unterminated_index_access = { "[" ~ expression? ~ EOI }
 
 primary = {
     lambda |
@@ -203,18 +221,27 @@ primary = {
     string_literal |
     command_substitution |
     env_var |
-    identifier
+    identifier |
+    unterminated_paren_expr |
+    unterminated_object_literal |
+    unterminated_list_literal
 }
+
+unterminated_paren_expr = { "(" ~ expression? ~ EOI }
 
 // --- Lambda ---
 lambda = { "(" ~ param_list? ~ ")" ~ "=>" ~ (block | expression) }
+unterminated_lambda_params = { "(" ~ param_list? ~ ")" ~ "=>" ~ EOI }
+unterminated_fn_params = { "fn" ~ identifier ~ generic_params? ~ "(" ~ param_list? ~ EOI }
 
 // --- Object and List Literals ---
 object_literal = { "{" ~ NEWLINE* ~ (object_pair ~ (object_sep ~ object_pair)* ~ object_sep?)? ~ NEWLINE* ~ "}" }
+unterminated_object_literal = { "{" ~ NEWLINE* ~ (object_pair ~ (object_sep ~ object_pair)* ~ object_sep?)? ~ NEWLINE* ~ EOI }
 object_pair = { (identifier | string_literal | interp_string) ~ ":" ~ expression }
 object_sep = _{ ("," | NEWLINE)+ }
 
 list_literal = { "[" ~ NEWLINE* ~ (expression ~ ("," ~ NEWLINE* ~ expression)* ~ ","? ~ NEWLINE*)? ~ "]" }
+unterminated_list_literal = { "[" ~ NEWLINE* ~ (expression ~ ("," ~ NEWLINE* ~ expression)* ~ ","? ~ NEWLINE*)? ~ EOI }
 
 // --- Literals ---
 integer_literal = @{
@@ -229,6 +256,7 @@ boolean_literal = { "true" | "false" }
 null_literal = { "null" }
 
 string_literal = ${ "'" ~ single_string_inner ~ "'" }
+unterminated_string_literal = ${ "'" ~ single_string_inner ~ EOI }
 single_string_inner = @{ single_string_char* }
 single_string_char = {
     !("'" | "\\") ~ ANY |
@@ -237,6 +265,7 @@ single_string_char = {
 
 // --- Interpolated strings (double-quoted) ---
 interp_string = ${ "\"" ~ interp_string_part* ~ "\"" }
+unterminated_interp_string = ${ "\"" ~ interp_string_part* ~ EOI }
 interp_string_part = _{ interp_string_interp | interp_string_env | interp_string_text }
 interp_string_text = @{ (!("\"" | "{" | "$" | "\\") ~ ANY | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "0" | "{" | "}" | "$") | "\\" ~ ("u" ~ "{" ~ ASCII_HEX_DIGIT{1,6} ~ "}"))+ }
 interp_string_interp = !{ "{" ~ expression ~ "}" }
@@ -244,16 +273,19 @@ interp_string_env = !{ "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 // --- Triple-quoted strings ---
 triple_double_string = ${ "\"\"\"" ~ NEWLINE? ~ triple_double_part* ~ "\"\"\"" }
+unterminated_triple_double_string = ${ "\"\"\"" ~ NEWLINE? ~ triple_double_part* ~ EOI }
 triple_double_part = _{ triple_double_interp | triple_double_env | triple_double_text }
 triple_double_text = @{ (!("\"\"\"" | "{" | "$") ~ ANY)+ }
 triple_double_interp = !{ "{" ~ expression ~ "}" }
 triple_double_env = !{ "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 triple_single_string = ${ "'''" ~ NEWLINE? ~ triple_single_inner ~ "'''" }
+unterminated_triple_single_string = ${ "'''" ~ NEWLINE? ~ triple_single_inner ~ EOI }
 triple_single_inner = @{ (!"'''" ~ ANY)* }
 
 // --- Char literal ---
 char_literal = ${ "c'" ~ char_literal_inner ~ "'" }
+unterminated_char_literal = ${ "c'" ~ char_literal_inner ~ EOI }
 char_literal_inner = @{
     !("'" | "\\") ~ ANY |
     "\\" ~ ("'" | "\\" | "n" | "r" | "t" | "0") |
@@ -263,15 +295,19 @@ char_literal_inner = @{
 // --- Extended delimiter strings ---
 // Uses ~ prefix to avoid conflict with # line comments.
 extended_double_string = ${ "~\"" ~ extended_double_inner ~ "\"~" }
+unterminated_extended_double_string = ${ "~\"" ~ extended_double_inner ~ EOI }
 extended_double_inner = @{ (!"\"~" ~ ANY)* }
 
 extended_single_string = ${ "~'" ~ extended_single_inner ~ "'~" }
+unterminated_extended_single_string = ${ "~'" ~ extended_single_inner ~ EOI }
 extended_single_inner = @{ (!"'~" ~ ANY)* }
 
 extended_triple_double_string = ${ "~\"\"\"" ~ NEWLINE? ~ extended_triple_double_inner ~ "\"\"\"~" }
+unterminated_extended_triple_double_string = ${ "~\"\"\"" ~ NEWLINE? ~ extended_triple_double_inner ~ EOI }
 extended_triple_double_inner = @{ (!"\"\"\"~" ~ ANY)* }
 
 extended_triple_single_string = ${ "~'''" ~ NEWLINE? ~ extended_triple_single_inner ~ "'''~" }
+unterminated_extended_triple_single_string = ${ "~'''" ~ NEWLINE? ~ extended_triple_single_inner ~ EOI }
 extended_triple_single_inner = @{ (!"'''~" ~ ANY)* }
 
 // --- Shell integration ---
@@ -303,10 +339,13 @@ shell_word = {
     shell_bare_word
 }
 command_substitution = { "$(" ~ NEWLINE* ~ (statement ~ (stmt_sep ~ statement)* ~ stmt_sep?)? ~ ")" }
-env_var = @{ "$" ~ "{" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* ~ "}" | "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+unterminated_command_substitution = { "$(" ~ NEWLINE* ~ (statement ~ (stmt_sep ~ statement)* ~ stmt_sep?)? ~ EOI }
+env_var = @{ "$" ~ "{" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* ~ "}" | "$" ~ "?" | "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 shell_quoted_string = ${ "\"" ~ shell_quoted_inner ~ "\"" }
+unterminated_shell_quoted_string = ${ "\"" ~ shell_quoted_inner ~ EOI }
 shell_quoted_inner = @{ (!"\"" ~ !"\n" ~ ANY)* }
 shell_single_string = ${ "'" ~ shell_single_inner ~ "'" }
+unterminated_shell_single_string = ${ "'" ~ shell_single_inner ~ EOI }
 shell_single_inner = @{ (!"'" ~ !"\n" ~ ANY)* }
 // Bare word: any non-whitespace, non-special characters (includes globs, flags, paths)
 shell_bare_word = @{ (!(WHITESPACE | NEWLINE | ";" | "|" | "&" | ">" | "\"" | "'" | "$(" | "#" | "//" | "{" | "}" | "(" | ")") ~ ANY)+ }

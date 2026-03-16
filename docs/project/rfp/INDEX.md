@@ -18,6 +18,12 @@ Cleaned-up prompt files used as input to the `/propose` skill. Each RFP preserve
 | 2026-03-14 | Agreement Checking — Terminology and Syntax | [agreement-checking-terminology-and-syntax.md](agreement-checking-terminology-and-syntax.md) |
 | 2026-03-14 | Language Syntax | [language-syntax.md](language-syntax.md) |
 | 2026-03-15 | String Syntax | [string-syntax.md](string-syntax.md) |
+| 2026-03-15 | Shell Integration | [shell-integration.md](shell-integration.md) |
+| 2026-03-15 | Shell Implementation | [shell-implementation.md](shell-implementation.md) |
+| 2026-03-15 | Shell Construction | [shell-construction.md](shell-construction.md) |
+| 2026-03-15 | Shell Build | [shell-build.md](shell-build.md) |
+| 2026-03-15 | Shell Build II | [shell-build-ii.md](shell-build-ii.md) |
+| 2026-03-15 | Shell Build III | [shell-build-iii.md](shell-build-iii.md) |
 
 ---
 

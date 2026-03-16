@@ -41,8 +41,9 @@ cd proto && cargo run -p ish-shell     # Run end-to-end demos (6 verifications)
 
 - See [GLOSSARY.md](GLOSSARY.md) for all terminology.
 - ish has a **low-assurance ↔ high-assurance continuum** — see [docs/spec/assurance-ledger.md](docs/spec/assurance-ledger.md).
-- The prototype has **no parser** — programs are built as ASTs in Rust using builder APIs or convenience constructors.
+- The prototype has a **PEG parser** (`ish-parser` crate) using pest, with a **parser-matches-everything** philosophy — the parser always succeeds, encoding incomplete input as `Incomplete` AST nodes.
 - The prototype proves three mechanisms: interpreted execution, compiled execution (AST → Rust → `.so` → dynamic load), and self-hosting (analyzer, generator, stdlib all written as ish programs).
+- The shell (`ish-shell`) is a Reedline-based interactive REPL with file/inline execution, multiline input via parser-based validation, and shell command execution.
 
 ---
 
@@ -51,11 +52,12 @@ cd proto && cargo run -p ish-shell     # Run end-to-end demos (6 verifications)
 | Crate | Purpose |
 |-------|---------|
 | `ish-ast` | AST node types, builder API, display formatting |
-| `ish-vm` | Tree-walking interpreter, GC-managed values, builtins, AST↔Value reflection |
+| `ish-parser` | PEG parser (pest), AST builder, parser-matches-everything |
+| `ish-vm` | Tree-walking interpreter, GC-managed values, builtins, AST↔Value reflection, shell command execution |
 | `ish-stdlib` | Self-hosted analyzer, Rust generator, and standard library (all written as ish programs) |
 | `ish-runtime` | Minimal value type shared between interpreter and compiled `.so` files |
 | `ish-codegen` | Compilation driver: generates temp Cargo project → `cargo build` → loads `.so` |
-| `ish-shell` | CLI binary running 6 verification demos |
+| `ish-shell` | Interactive REPL (Reedline), file execution, inline execution |
 
 ---
 

@@ -221,6 +221,10 @@ impl<'a> fmt::Display for StmtDisplay<'a> {
                 indent(f, d)?;
                 write!(f, "}}")
             }
+            Statement::Incomplete { kind } => {
+                indent(f, d)?;
+                write!(f, "<incomplete: {:?}>", kind)
+            }
         }
     }
 }
@@ -316,6 +320,9 @@ impl<'a> fmt::Display for ExprDisplay<'a> {
             }
             Expression::EnvVar(name) => {
                 write!(f, "${}", name)
+            }
+            Expression::Incomplete { kind } => {
+                write!(f, "<incomplete: {:?}>", kind)
             }
         }
     }

@@ -173,6 +173,10 @@ pub fn stmt_to_value(stmt: &Statement) -> Value {
         Statement::Match { .. } => {
             map.insert("kind".to_string(), str_val("match"));
         }
+        Statement::Incomplete { kind } => {
+            map.insert("kind".to_string(), str_val("incomplete"));
+            map.insert("incomplete_kind".to_string(), str_val(&format!("{:?}", kind)));
+        }
     }
     Value::Object(Gc::new(GcCell::new(map)))
 }
@@ -300,6 +304,10 @@ pub fn expr_to_value(expr: &Expression) -> Value {
         Expression::EnvVar(name) => {
             map.insert("kind".to_string(), str_val("env_var"));
             map.insert("name".to_string(), str_val(name));
+        }
+        Expression::Incomplete { kind } => {
+            map.insert("kind".to_string(), str_val("incomplete"));
+            map.insert("incomplete_kind".to_string(), str_val(&format!("{:?}", kind)));
         }
     }
     Value::Object(Gc::new(GcCell::new(map)))

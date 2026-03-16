@@ -58,6 +58,11 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, ParseError> {
         Rule::standard_def => build_standard_def(pair),
         Rule::entry_type_def => build_entry_type_def(pair),
         Rule::match_stmt => build_match_stmt(pair),
+        // Unterminated productions → Incomplete AST nodes
+        Rule::unterminated_block => Ok(Statement::Incomplete { kind: IncompleteKind::Block }),
+        Rule::unterminated_match => Ok(Statement::Incomplete { kind: IncompleteKind::Match }),
+        Rule::unterminated_entry_type_def => Ok(Statement::Incomplete { kind: IncompleteKind::EntryTypeDef }),
+        Rule::unterminated_standard_def => Ok(Statement::Incomplete { kind: IncompleteKind::StandardDef }),
         Rule::expression_stmt => {
             let inner = pair.into_inner().next().unwrap();
             Ok(Statement::ExpressionStmt(build_expression(inner)?))
@@ -837,6 +842,25 @@ pub fn build_expression(pair: Pair<Rule>) -> Result<Expression, ParseError> {
             };
             Ok(Expression::EnvVar(name.to_string()))
         }
+
+        // Unterminated expression-level productions → Incomplete AST nodes
+        Rule::unterminated_paren_expr => Ok(Expression::Incomplete { kind: IncompleteKind::ParenExpr }),
+        Rule::unterminated_object_literal => Ok(Expression::Incomplete { kind: IncompleteKind::ObjectLiteral }),
+        Rule::unterminated_list_literal => Ok(Expression::Incomplete { kind: IncompleteKind::ListLiteral }),
+        Rule::unterminated_call_args => Ok(Expression::Incomplete { kind: IncompleteKind::CallArgs }),
+        Rule::unterminated_index_access => Ok(Expression::Incomplete { kind: IncompleteKind::IndexAccess }),
+        Rule::unterminated_command_substitution => Ok(Expression::Incomplete { kind: IncompleteKind::CommandSubstitution }),
+        Rule::unterminated_string_literal => Ok(Expression::Incomplete { kind: IncompleteKind::StringLiteral }),
+        Rule::unterminated_interp_string => Ok(Expression::Incomplete { kind: IncompleteKind::InterpString }),
+        Rule::unterminated_triple_double_string => Ok(Expression::Incomplete { kind: IncompleteKind::TripleDoubleString }),
+        Rule::unterminated_triple_single_string => Ok(Expression::Incomplete { kind: IncompleteKind::TripleSingleString }),
+        Rule::unterminated_char_literal => Ok(Expression::Incomplete { kind: IncompleteKind::CharLiteral }),
+        Rule::unterminated_extended_double_string => Ok(Expression::Incomplete { kind: IncompleteKind::ExtendedDoubleString }),
+        Rule::unterminated_extended_single_string => Ok(Expression::Incomplete { kind: IncompleteKind::ExtendedSingleString }),
+        Rule::unterminated_extended_triple_double_string => Ok(Expression::Incomplete { kind: IncompleteKind::ExtendedTripleDoubleString }),
+        Rule::unterminated_extended_triple_single_string => Ok(Expression::Incomplete { kind: IncompleteKind::ExtendedTripleSingleString }),
+        Rule::unterminated_shell_quoted_string => Ok(Expression::Incomplete { kind: IncompleteKind::ShellQuotedString }),
+        Rule::unterminated_shell_single_string => Ok(Expression::Incomplete { kind: IncompleteKind::ShellSingleString }),
 
         _ => {
             let span = pair.as_span();

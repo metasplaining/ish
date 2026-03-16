@@ -17,6 +17,71 @@ pub struct Span {
     pub end: usize,
 }
 
+// ── Incomplete input detection ──────────────────────────────────────────────
+
+/// Identifies which delimited construct was left unterminated.
+/// The parser produces `Incomplete` AST nodes instead of errors so it always
+/// succeeds (parser-matches-everything philosophy).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum IncompleteKind {
+    // Brace-delimited (5)
+    Block,
+    ObjectLiteral,
+    Match,
+    EntryTypeDef,
+    ObjectType,
+    // Bracket-delimited (5)
+    ListLiteral,
+    StandardDef,
+    StandardAnnotation,
+    EntryAnnotation,
+    IndexAccess,
+    // Paren-delimited (9)
+    ParenExpr,
+    CallArgs,
+    FnParams,
+    LambdaParams,
+    WithResources,
+    CatchParam,
+    CommandSubstitution,
+    TupleType,
+    FunctionType,
+    // String-delimited (11)
+    StringLiteral,
+    InterpString,
+    TripleSingleString,
+    TripleDoubleString,
+    CharLiteral,
+    ExtendedDoubleString,
+    ExtendedSingleString,
+    ExtendedTripleDoubleString,
+    ExtendedTripleSingleString,
+    ShellQuotedString,
+    ShellSingleString,
+    // Comment / angle-bracket (3)
+    BlockComment,
+    GenericParams,
+    GenericType,
+}
+
+impl IncompleteKind {
+    /// Returns `true` if the REPL should wait for more input (multiline
+    /// continuation). Returns `false` for single-line constructs that
+    /// cannot span lines — those are reported as immediate errors.
+    pub fn is_continuable(&self) -> bool {
+        !matches!(
+            self,
+            IncompleteKind::StringLiteral
+                | IncompleteKind::InterpString
+                | IncompleteKind::CharLiteral
+                | IncompleteKind::ExtendedDoubleString
+                | IncompleteKind::ExtendedSingleString
+                | IncompleteKind::ShellQuotedString
+                | IncompleteKind::ShellSingleString
+        )
+    }
+}
+
 // ── Type annotations ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -123,6 +188,9 @@ pub enum Expression {
     StringInterpolation(Vec<StringPart>),
     CommandSubstitution(Box<Statement>), // $(...) — wraps a ShellCommand or pipeline
     EnvVar(String), // $HOME or ${PATH}
+    Incomplete {
+        kind: IncompleteKind,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -229,6 +297,9 @@ pub enum Statement {
     Match {
         subject: Expression,
         arms: Vec<MatchArm>,
+    },
+    Incomplete {
+        kind: IncompleteKind,
     },
 }
 
@@ -535,6 +606,179 @@ impl Parameter {
 impl Program {
     pub fn new(statements: Vec<Statement>) -> Self {
         Program { statements }
+    }
+
+    /// Returns `true` if the AST contains any `Incomplete` node whose kind
+    /// is continuable (i.e. the REPL should wait for more input).
+    pub fn has_incomplete_continuable(&self) -> bool {
+        self.statements.iter().any(|s| s.has_incomplete_continuable())
+    }
+
+    /// Returns `true` if the AST contains any `Incomplete` node at all.
+    pub fn has_any_incomplete(&self) -> bool {
+        self.statements.iter().any(|s| s.has_any_incomplete())
+    }
+}
+
+impl Statement {
+    /// Recursively check for continuable incomplete nodes.
+    pub fn has_incomplete_continuable(&self) -> bool {
+        match self {
+            Statement::Incomplete { kind } => kind.is_continuable(),
+            Statement::Block { statements } => {
+                statements.iter().any(|s| s.has_incomplete_continuable())
+            }
+            Statement::If { condition, then_block, else_block } => {
+                condition.has_incomplete_continuable()
+                    || then_block.has_incomplete_continuable()
+                    || else_block.as_ref().map_or(false, |e| e.has_incomplete_continuable())
+            }
+            Statement::While { condition, body } => {
+                condition.has_incomplete_continuable() || body.has_incomplete_continuable()
+            }
+            Statement::ForEach { iterable, body, .. } => {
+                iterable.has_incomplete_continuable() || body.has_incomplete_continuable()
+            }
+            Statement::VariableDecl { value, .. } => value.has_incomplete_continuable(),
+            Statement::Assignment { value, .. } => value.has_incomplete_continuable(),
+            Statement::Return { value } => {
+                value.as_ref().map_or(false, |v| v.has_incomplete_continuable())
+            }
+            Statement::ExpressionStmt(expr) => expr.has_incomplete_continuable(),
+            Statement::FunctionDecl { body, .. } => body.has_incomplete_continuable(),
+            Statement::Throw { value } => value.has_incomplete_continuable(),
+            Statement::TryCatch { body, catches, finally } => {
+                body.has_incomplete_continuable()
+                    || catches.iter().any(|c| c.body.has_incomplete_continuable())
+                    || finally.as_ref().map_or(false, |f| f.has_incomplete_continuable())
+            }
+            Statement::WithBlock { body, .. } => body.has_incomplete_continuable(),
+            Statement::Defer { body } => body.has_incomplete_continuable(),
+            Statement::Annotated { inner, .. } => inner.has_incomplete_continuable(),
+            Statement::Match { subject, arms } => {
+                subject.has_incomplete_continuable()
+                    || arms.iter().any(|a| a.body.has_incomplete_continuable())
+            }
+            Statement::ShellCommand { .. }
+            | Statement::TypeAlias { .. }
+            | Statement::Use { .. }
+            | Statement::ModDecl { .. }
+            | Statement::StandardDef { .. }
+            | Statement::EntryTypeDef { .. } => false,
+        }
+    }
+
+    /// Recursively check for any incomplete nodes (continuable or not).
+    pub fn has_any_incomplete(&self) -> bool {
+        match self {
+            Statement::Incomplete { .. } => true,
+            Statement::Block { statements } => {
+                statements.iter().any(|s| s.has_any_incomplete())
+            }
+            Statement::If { condition, then_block, else_block } => {
+                condition.has_any_incomplete()
+                    || then_block.has_any_incomplete()
+                    || else_block.as_ref().map_or(false, |e| e.has_any_incomplete())
+            }
+            Statement::While { condition, body } => {
+                condition.has_any_incomplete() || body.has_any_incomplete()
+            }
+            Statement::ForEach { iterable, body, .. } => {
+                iterable.has_any_incomplete() || body.has_any_incomplete()
+            }
+            Statement::VariableDecl { value, .. } => value.has_any_incomplete(),
+            Statement::Assignment { value, .. } => value.has_any_incomplete(),
+            Statement::Return { value } => {
+                value.as_ref().map_or(false, |v| v.has_any_incomplete())
+            }
+            Statement::ExpressionStmt(expr) => expr.has_any_incomplete(),
+            Statement::FunctionDecl { body, .. } => body.has_any_incomplete(),
+            Statement::Throw { value } => value.has_any_incomplete(),
+            Statement::TryCatch { body, catches, finally } => {
+                body.has_any_incomplete()
+                    || catches.iter().any(|c| c.body.has_any_incomplete())
+                    || finally.as_ref().map_or(false, |f| f.has_any_incomplete())
+            }
+            Statement::WithBlock { body, .. } => body.has_any_incomplete(),
+            Statement::Defer { body } => body.has_any_incomplete(),
+            Statement::Annotated { inner, .. } => inner.has_any_incomplete(),
+            Statement::Match { subject, arms } => {
+                subject.has_any_incomplete()
+                    || arms.iter().any(|a| a.body.has_any_incomplete())
+            }
+            Statement::ShellCommand { .. }
+            | Statement::TypeAlias { .. }
+            | Statement::Use { .. }
+            | Statement::ModDecl { .. }
+            | Statement::StandardDef { .. }
+            | Statement::EntryTypeDef { .. } => false,
+        }
+    }
+}
+
+impl Expression {
+    /// Recursively check for continuable incomplete nodes.
+    pub fn has_incomplete_continuable(&self) -> bool {
+        match self {
+            Expression::Incomplete { kind } => kind.is_continuable(),
+            Expression::BinaryOp { left, right, .. } => {
+                left.has_incomplete_continuable() || right.has_incomplete_continuable()
+            }
+            Expression::UnaryOp { operand, .. } => operand.has_incomplete_continuable(),
+            Expression::FunctionCall { callee, args } => {
+                callee.has_incomplete_continuable()
+                    || args.iter().any(|a| a.has_incomplete_continuable())
+            }
+            Expression::ObjectLiteral(pairs) => {
+                pairs.iter().any(|(_, v)| v.has_incomplete_continuable())
+            }
+            Expression::ListLiteral(elems) => {
+                elems.iter().any(|e| e.has_incomplete_continuable())
+            }
+            Expression::IndexAccess { object, index } => {
+                object.has_incomplete_continuable() || index.has_incomplete_continuable()
+            }
+            Expression::PropertyAccess { object, .. } => object.has_incomplete_continuable(),
+            Expression::Lambda { body, .. } => body.has_incomplete_continuable(),
+            Expression::StringInterpolation(parts) => parts.iter().any(|p| match p {
+                StringPart::Expr(e) => e.has_incomplete_continuable(),
+                _ => false,
+            }),
+            Expression::CommandSubstitution(cmd) => cmd.has_incomplete_continuable(),
+            _ => false,
+        }
+    }
+
+    /// Recursively check for any incomplete nodes.
+    pub fn has_any_incomplete(&self) -> bool {
+        match self {
+            Expression::Incomplete { .. } => true,
+            Expression::BinaryOp { left, right, .. } => {
+                left.has_any_incomplete() || right.has_any_incomplete()
+            }
+            Expression::UnaryOp { operand, .. } => operand.has_any_incomplete(),
+            Expression::FunctionCall { callee, args } => {
+                callee.has_any_incomplete()
+                    || args.iter().any(|a| a.has_any_incomplete())
+            }
+            Expression::ObjectLiteral(pairs) => {
+                pairs.iter().any(|(_, v)| v.has_any_incomplete())
+            }
+            Expression::ListLiteral(elems) => {
+                elems.iter().any(|e| e.has_any_incomplete())
+            }
+            Expression::IndexAccess { object, index } => {
+                object.has_any_incomplete() || index.has_any_incomplete()
+            }
+            Expression::PropertyAccess { object, .. } => object.has_any_incomplete(),
+            Expression::Lambda { body, .. } => body.has_any_incomplete(),
+            Expression::StringInterpolation(parts) => parts.iter().any(|p| match p {
+                StringPart::Expr(e) => e.has_any_incomplete(),
+                _ => false,
+            }),
+            Expression::CommandSubstitution(cmd) => cmd.has_any_incomplete(),
+            _ => false,
+        }
     }
 }
 
