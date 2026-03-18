@@ -19,6 +19,7 @@ Instructions for AI agents working in this repository.
 cd proto && cargo build --workspace    # Build everything
 cd proto && cargo test --workspace     # Run all tests (45 tests)
 cd proto && cargo run -p ish-shell     # Run end-to-end demos (6 verifications)
+cd proto && bash ish-tests/run_all.sh  # Run acceptance tests (150 tests)
 ```
 
 ---
@@ -34,6 +35,7 @@ cd proto && cargo run -p ish-shell     # Run end-to-end demos (6 verifications)
 | `docs/project/` | Roadmap, maturity, decisions, history, open questions |
 | `docs/errors/` | Error catalog |
 | `proto/` | Prototype implementation in Rust (6 crates) |
+| `proto/ish-tests/` | Bash acceptance tests (run with `bash ish-tests/run_all.sh`) |
 
 ---
 
@@ -73,6 +75,7 @@ Load only the files you need for the task at hand.
 | Working on modules | [docs/spec/modules.md](docs/spec/modules.md) |
 | Understanding execution configs | [docs/spec/execution.md](docs/spec/execution.md) |
 | Reviewing open questions | [docs/project/open-questions.md](docs/project/open-questions.md) |
+| Adding acceptance tests | [proto/ish-tests/lib/test_lib.sh](proto/ish-tests/lib/test_lib.sh), existing tests in `proto/ish-tests/` |
 | Understanding a design decision | [docs/project/decisions/INDEX.md](docs/project/decisions/INDEX.md) |
 
 ---

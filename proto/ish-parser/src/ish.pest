@@ -269,7 +269,10 @@ unterminated_interp_string = ${ "\"" ~ interp_string_part* ~ EOI }
 interp_string_part = _{ interp_string_interp | interp_string_env | interp_string_text }
 interp_string_text = @{ (!("\"" | "{" | "$" | "\\") ~ ANY | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "0" | "{" | "}" | "$") | "\\" ~ ("u" ~ "{" ~ ASCII_HEX_DIGIT{1,6} ~ "}"))+ }
 interp_string_interp = !{ "{" ~ expression ~ "}" }
-interp_string_env = !{ "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+interp_string_env = !{
+    "$" ~ "{" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* ~ "}" |
+    "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*
+}
 
 // --- Triple-quoted strings ---
 triple_double_string = ${ "\"\"\"" ~ NEWLINE? ~ triple_double_part* ~ "\"\"\"" }
@@ -277,7 +280,10 @@ unterminated_triple_double_string = ${ "\"\"\"" ~ NEWLINE? ~ triple_double_part*
 triple_double_part = _{ triple_double_interp | triple_double_env | triple_double_text }
 triple_double_text = @{ (!("\"\"\"" | "{" | "$") ~ ANY)+ }
 triple_double_interp = !{ "{" ~ expression ~ "}" }
-triple_double_env = !{ "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+triple_double_env = !{
+    "$" ~ "{" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* ~ "}" |
+    "$" ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*
+}
 
 triple_single_string = ${ "'''" ~ NEWLINE? ~ triple_single_inner ~ "'''" }
 unterminated_triple_single_string = ${ "'''" ~ NEWLINE? ~ triple_single_inner ~ EOI }

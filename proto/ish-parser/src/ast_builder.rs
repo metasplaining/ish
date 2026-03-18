@@ -1135,7 +1135,11 @@ fn build_interp_string(pair: Pair<Rule>) -> Result<Expression, ParseError> {
             }
             Rule::interp_string_env => {
                 let raw = p.as_str();
-                let name = &raw[1..]; // strip leading $
+                let name = if raw.starts_with("${") && raw.ends_with('}') {
+                    &raw[2..raw.len() - 1]
+                } else {
+                    &raw[1..]
+                };
                 parts.push(StringPart::Expr(Expression::EnvVar(name.to_string())));
             }
             _ => {}
@@ -1166,7 +1170,11 @@ fn build_triple_double_string(pair: Pair<Rule>) -> Result<Expression, ParseError
             }
             Rule::triple_double_env => {
                 let raw = p.as_str();
-                let name = &raw[1..];
+                let name = if raw.starts_with("${") && raw.ends_with('}') {
+                    &raw[2..raw.len() - 1]
+                } else {
+                    &raw[1..]
+                };
                 parts.push(StringPart::Expr(Expression::EnvVar(name.to_string())));
             }
             _ => {}

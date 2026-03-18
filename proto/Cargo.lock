@@ -334,6 +334,7 @@ version = "0.1.0"
 dependencies = [
  "gc",
  "ish-ast",
+ "ish-parser",
  "serde_json",
 ]
 

@@ -24,6 +24,7 @@ Cleaned-up prompt files used as input to the `/propose` skill. Each RFP preserve
 | 2026-03-15 | Shell Build | [shell-build.md](shell-build.md) |
 | 2026-03-15 | Shell Build II | [shell-build-ii.md](shell-build-ii.md) |
 | 2026-03-15 | Shell Build III | [shell-build-iii.md](shell-build-iii.md) |
+| 2026-03-16 | Acceptance Tests | [acceptance-tests.md](acceptance-tests.md) |
 
 ---
 

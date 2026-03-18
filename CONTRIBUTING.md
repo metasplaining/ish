@@ -125,6 +125,7 @@ After every incremental change to the system:
 - Build: `cd proto && cargo build --workspace`
 - Test: `cd proto && cargo test --workspace`
 - Run demos: `cd proto && cargo run -p ish-shell`
+- Acceptance tests: `cd proto && bash ish-tests/run_all.sh`
 - All tests must pass before committing.
 - Follow standard Rust formatting (`cargo fmt`).
 - Use `Result` types for error handling — do not panic.

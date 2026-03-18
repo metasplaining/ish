@@ -679,7 +679,7 @@ impl IshVm {
         for arg in args {
             match arg {
                 ShellArg::Bare(s) => resolved.push(s.clone()),
-                ShellArg::Quoted(s) => resolved.push(s.clone()),
+                ShellArg::Quoted(s) => resolved.push(interpolate_shell_quoted(s, env)),
                 ShellArg::Glob(pattern) => {
                     // Expand glob pattern using standard library
                     match glob_expand(pattern) {
@@ -688,17 +688,7 @@ impl IshVm {
                     }
                 }
                 ShellArg::EnvVar(name) => {
-                    if name == "?" {
-                        match env.get("__ish_last_exit_code") {
-                            Ok(Value::Int(code)) => resolved.push(code.to_string()),
-                            _ => resolved.push("0".to_string()),
-                        }
-                    } else {
-                        match std::env::var(name) {
-                            Ok(val) => resolved.push(val),
-                            Err(_) => resolved.push(String::new()),
-                        }
-                    }
+                    resolved.push(resolve_shell_var(name, env));
                 }
                 ShellArg::CommandSub(inner) => {
                     match inner.as_ref() {
@@ -736,23 +726,28 @@ impl IshVm {
 
         if pipes.is_empty() {
             // Single command — handle redirections
+            apply_redirections(&mut cmd, redirections)?;
+
             if capture {
                 cmd.stdout(Stdio::piped());
                 cmd.stderr(Stdio::piped());
-            }
 
-            apply_redirections(&mut cmd, redirections)?;
+                let output = cmd.output().map_err(|e| {
+                    RuntimeError::new(format!("{}: {}", command, e))
+                })?;
 
-            let output = cmd.output().map_err(|e| {
-                RuntimeError::new(format!("{}: {}", command, e))
-            })?;
+                let exit_code = output.status.code().unwrap_or(-1) as i64;
+                env.define("__ish_last_exit_code".to_string(), Value::Int(exit_code));
 
-            let exit_code = output.status.code().unwrap_or(-1) as i64;
-            env.define("__ish_last_exit_code".to_string(), Value::Int(exit_code));
-
-            if capture {
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             } else {
+                let status = cmd.status().map_err(|e| {
+                    RuntimeError::new(format!("{}: {}", command, e))
+                })?;
+
+                let exit_code = status.code().unwrap_or(-1) as i64;
+                env.define("__ish_last_exit_code".to_string(), Value::Int(exit_code));
+
                 Ok(String::new())
             }
         } else {
@@ -1094,12 +1089,103 @@ fn simple_glob_match(pattern: &str, text: &str) -> bool {
     true
 }
 
+fn resolve_shell_var(name: &str, env: &Environment) -> String {
+    if name == "?" {
+        return match env.get("__ish_last_exit_code") {
+            Ok(Value::Int(code)) => code.to_string(),
+            _ => "0".to_string(),
+        };
+    }
+
+    match env.get(name) {
+        Ok(val) => val.to_display_string(),
+        Err(_) => match std::env::var(name) {
+            Ok(val) => val,
+            Err(_) => String::new(),
+        },
+    }
+}
+
+fn interpolate_shell_quoted(input: &str, env: &Environment) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        if c == '$' {
+            if i + 1 < chars.len() && chars[i + 1] == '{' {
+                let mut j = i + 2;
+                while j < chars.len() && chars[j] != '}' {
+                    j += 1;
+                }
+                if j < chars.len() {
+                    let name: String = chars[i + 2..j].iter().collect();
+                    out.push_str(&resolve_shell_var(&name, env));
+                    i = j + 1;
+                    continue;
+                }
+            } else if i + 1 < chars.len() && chars[i + 1] == '?' {
+                out.push_str(&resolve_shell_var("?", env));
+                i += 2;
+                continue;
+            } else {
+                let mut j = i + 1;
+                if j < chars.len() && (chars[j].is_ascii_alphabetic() || chars[j] == '_') {
+                    j += 1;
+                    while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                        j += 1;
+                    }
+                    let name: String = chars[i + 1..j].iter().collect();
+                    out.push_str(&resolve_shell_var(&name, env));
+                    i = j;
+                    continue;
+                }
+            }
+        }
+
+        if c == '{' {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j] != '}' {
+                j += 1;
+            }
+            if j < chars.len() {
+                let name: String = chars[i + 1..j].iter().collect();
+                if !name.is_empty()
+                    && (name.chars().next().unwrap().is_ascii_alphabetic() || name.starts_with('_'))
+                    && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                {
+                    out.push_str(&resolve_shell_var(&name, env));
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+
+        out.push(c);
+        i += 1;
+    }
+
+    out
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ish_ast::builder::{ProgramBuilder, BlockBuilder};
+    use ish_parser::parse;
+
+    fn run_source(source: &str) -> Value {
+        let program = parse(source).unwrap_or_else(|errs| {
+            panic!("parse failed: {:?}", errs)
+        });
+
+        let mut vm = IshVm::new();
+        vm.run(&program).unwrap()
+    }
 
     #[test]
     fn test_variable_decl_and_lookup() {
@@ -1323,6 +1409,66 @@ mod tests {
         let mut vm = IshVm::new();
         let result = vm.run(&program).unwrap();
         assert_eq!(result, Value::String(Rc::new("hello world".into())));
+    }
+
+    #[test]
+    fn test_double_quoted_string_interpolates_expression_and_env_var() {
+        std::env::set_var("ISH_VM_TEST_INTERP_DQ", "alpha");
+
+        let result = run_source(
+            r#"
+            let x = 40;
+            "value {x + 2} ${ISH_VM_TEST_INTERP_DQ}"
+            "#,
+        );
+
+        assert_eq!(result, Value::String(Rc::new("value 42 alpha".into())));
+        std::env::remove_var("ISH_VM_TEST_INTERP_DQ");
+    }
+
+    #[test]
+    fn test_double_quoted_string_interpolates_expression_and_bare_env_var() {
+        std::env::set_var("ISH_VM_TEST_INTERP_DQ_BARE", "beta");
+
+        let result = run_source(
+            r#"
+            let x = 6;
+            "sum {x * 7} $ISH_VM_TEST_INTERP_DQ_BARE"
+            "#,
+        );
+
+        assert_eq!(result, Value::String(Rc::new("sum 42 beta".into())));
+        std::env::remove_var("ISH_VM_TEST_INTERP_DQ_BARE");
+    }
+
+    #[test]
+    fn test_triple_double_string_interpolates_expression_and_env_var() {
+        std::env::set_var("ISH_VM_TEST_INTERP_TDQ", "gamma");
+
+        let result = run_source(
+            r#"
+            let x = 41;
+            """triple {x + 1} ${ISH_VM_TEST_INTERP_TDQ}"""
+            "#,
+        );
+
+        assert_eq!(result, Value::String(Rc::new("triple 42 gamma".into())));
+        std::env::remove_var("ISH_VM_TEST_INTERP_TDQ");
+    }
+
+    #[test]
+    fn test_triple_double_string_interpolates_expression_and_bare_env_var() {
+        std::env::set_var("ISH_VM_TEST_INTERP_TDQ_BARE", "delta");
+
+        let result = run_source(
+            r#"
+            let x = 21;
+            """triple {x * 2} $ISH_VM_TEST_INTERP_TDQ_BARE"""
+            "#,
+        );
+
+        assert_eq!(result, Value::String(Rc::new("triple 42 delta".into())));
+        std::env::remove_var("ISH_VM_TEST_INTERP_TDQ_BARE");
     }
 
     // ── Error handling tests ────────────────────────────────────────────
