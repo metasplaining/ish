@@ -28,6 +28,7 @@ Structured proposals generated from prompt files using the `/propose` skill. Eac
 | 2026-03-15 | Shell Build II | proposal | [shell-build-ii.md](shell-build-ii.md) |
 | 2026-03-15 | Shell Build III | proposal | [shell-build-iii.md](shell-build-iii.md) |
 | 2026-03-16 | Acceptance Tests | proposal | [acceptance-tests.md](acceptance-tests.md) |
+| 2026-03-18 | Proposal Process Improvements | accepted | [proposal-process-improvements.md](proposal-process-improvements.md) |
 
 ---
 

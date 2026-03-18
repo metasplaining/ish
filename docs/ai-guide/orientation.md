@@ -4,7 +4,7 @@ category: ai-guide
 audience: [ai-agent]
 status: placeholder
 last-verified: 2026-03-10
-depends-on: [GLOSSARY.md, docs/spec/INDEX.md, docs/architecture/INDEX.md]
+depends-on: [GLOSSARY.md, docs/spec/INDEX.md, docs/architecture/INDEX.md, CONTRIBUTING.md]
 ---
 
 # AI Agent Orientation
@@ -64,7 +64,21 @@ When working on ish, load context in layers:
 | Prototype design | `docs/architecture/` |
 | Open questions | `docs/project/open-questions.md` |
 | Decision records | `docs/project/decisions/` |
+| Design proposals | `docs/project/proposals/` |
+| Implementation plans | `docs/project/plans/` |
+| Design history | `docs/project/history/` |
 | How to contribute | `CONTRIBUTING.md` |
+| Proposal process | `.github/copilot-instructions.md`, `.github/skills/` |
+
+## Proposal Process
+
+Non-trivial changes follow a three-document lifecycle:
+
+1. **RFP** (`docs/project/rfp/`) — Cleaned-up request from the human.
+2. **Design Proposal** (`docs/project/proposals/`) — Iterative design with alternatives and decisions.
+3. **Implementation Plan** (`docs/project/plans/`) — Consolidated TODO list, the single source of truth during implementation.
+
+Six skills support this lifecycle: `/propose`, `/revise`, `/accept`, `/plan`, `/implement`, `/audit`. See the skill files in `.github/skills/` for procedures. Authority order (the sequence in which artifacts are updated during implementation) is documented in `CONTRIBUTING.md` and `.github/copilot-instructions.md`.
 
 ## Common AI Tasks
 

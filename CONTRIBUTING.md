@@ -26,7 +26,7 @@ ish/
 │   ├── architecture/      Architecture and internals
 │   ├── user-guide/        User guide for human developers
 │   ├── ai-guide/          User guide for AI developers
-│   ├── project/           Roadmap, maturity, decisions, history, rfp
+│   ├── project/           Roadmap, maturity, decisions, history, rfp, proposals, plans
 │   └── errors/            Error catalog
 └── proto/                 Prototype implementation (Rust)
 ```
@@ -95,12 +95,48 @@ Each specification file has an `## Open Questions` section at the bottom. These 
 
 ### Requests for Proposal (RFPs)
 
-When a prompt file is used to generate a proposal via the `/propose` skill, the prompt is first converted into a **Request for Proposal (RFP)**. The RFP is a cleaned-up version of the original prompt with corrected grammar, formatting, and typos, but with all original meanings preserved.
+When a prompt file is used to generate a design proposal via the `/propose` skill, the prompt is first converted into a **Request for Proposal (RFP)**. The RFP is a cleaned-up version of the original prompt with corrected grammar, formatting, and typos, but with all original meanings preserved.
 
 - RFPs are saved to `docs/project/rfp/` with a meaningful filename.
 - RFPs use standard YAML frontmatter with `category: rfp`.
 - The RFP index at `docs/project/rfp/INDEX.md` tracks all RFPs.
-- Proposals reference their RFP, not the original prompt file.
+- Design proposals reference their RFP, not the original prompt file.
+
+### Proposals and Plans
+
+Non-trivial changes follow a three-document lifecycle:
+
+1. **RFP** (`docs/project/rfp/`) — Cleaned-up request from the human.
+2. **Design Proposal** (`docs/project/proposals/`) — Analysis with alternatives, decisions, and recommendations. Iterates via complete replacement until accepted.
+3. **Implementation Plan** (`docs/project/plans/`) — Consolidated TODO list derived from the accepted design proposal. The single source of truth during implementation.
+
+The agent decides whether an RFP needs a design proposal or can proceed directly to an implementation plan.
+
+During the design phase, proposals iterate using these rules:
+- Each new version is a **complete replacement**, not a diff.
+- Every design proposal includes a **decision register** at the top — the authoritative record of all decisions.
+- The `/revise` skill updates the decision register first, then rewrites the body to be consistent.
+- After generating or revising a proposal, the agent scans the entire document for contradictions (self-consistency check).
+- Prior versions are preserved in the proposal's **design history directory** under `docs/project/history/`.
+
+### Authority Order
+
+When implementing a feature, update project artifacts in this sequence so that any artifact read during implementation reflects the current truth:
+
+1. **Glossary** — New terms must exist before any document references them.
+2. **Roadmap** — Feature status set to "in progress."
+3. **Specification** — The normative definition of behavior.
+4. **Architecture** — How the spec is realized in the codebase.
+5. **User guide / AI guide** — How to use the feature.
+6. **Agent documentation** — Skills, copilot-instructions.md, AGENTS.md.
+7. **Acceptance tests** — Tests that define "done."
+8. **Code** — Implementation.
+9. **Unit tests** — Tests for internal correctness.
+10. **Roadmap** — Feature status set to "completed."
+11. **History** — Narrative of the work.
+12. **Index files** — Updated last.
+
+Authority order is enforced by agent instructions only, not by tooling.
 
 ---
 
@@ -113,7 +149,7 @@ After every incremental change to the system:
 3. **Update status.** If a `stable` document was modified, its status reverts to `review`.
 4. **Update `last-verified` date** once confirmed accurate.
 5. **Update the maturity document** ([docs/project/maturity.md](docs/project/maturity.md)) if the change affects what is implemented.
-6. **Add a history file** under `docs/project/history/` named `<isodate>-<topic>.md` and update the [history index](docs/project/history/INDEX.md). History files are written for a human audience — use narrative prose that tells the story of what changed and why, showing the proposal → feedback → decision flow where applicable. Do not write terse agent-style summaries.
+6. **Add a history entry** under `docs/project/history/`. For proposals, create a directory named `<isodate>-<topic>/` containing a `summary.md` (narrative of how the proposal evolved) and separate version files (`v1.md`, `v2.md`, etc.). For non-proposal changes, create a single file named `<isodate>-<topic>.md`. Update the [history index](docs/project/history/INDEX.md). History entries are written for a human audience — use narrative prose that tells the story of what changed and why, showing the proposal → feedback → decision flow where applicable. Do not write terse agent-style summaries.
 7. **Track documentation debt** in [docs/project/documentation-debt.md](docs/project/documentation-debt.md) if docs cannot be updated immediately.
 
 ---

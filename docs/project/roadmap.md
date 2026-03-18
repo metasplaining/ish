@@ -32,6 +32,7 @@ The language is being designed iteratively. A Rust prototype explores key ideas.
 - [x] Shell: Reedline-based interactive REPL with multiline input, syntax highlighting, history
 - [x] Shell: File and inline execution modes
 - [x] Shell: Command execution (builtins, external commands, pipes, redirections, globs, `$?`)
+- [x] Proposal process improvements (three-document lifecycle, six skills, authority order)
 
 ### In Progress
 

@@ -1,12 +1,12 @@
 ---
 name: propose
-description: 'Create a structured proposal from a prompt file. Use when: the user has a file containing questions, feature requests, or instructions (like a prompt file) and wants a detailed plan with critical analysis, alternatives, and implementation details. Trigger words: propose, proposal, plan, feature request, prompt file, design review.'
+description: 'Create a structured design proposal from a prompt file. Use when: the user has a file containing questions, feature requests, or instructions (like a prompt file) and wants a detailed design proposal with critical analysis, alternatives, and implementation details. Trigger words: propose, proposal, design, design proposal, feature request, prompt file, design review.'
 argument-hint: 'Path to a file containing questions and feature requests'
 ---
 
 # Propose
 
-Read a prompt file containing questions and feature requests, then produce a structured proposal with critical analysis and implementation details. Save the result for human review.
+Read a prompt file containing questions and feature requests, then produce a structured design proposal with critical analysis and implementation details. Save the result for human review.
 
 ## When to Use
 
@@ -53,20 +53,33 @@ Read a prompt file containing questions and feature requests, then produce a str
 6. **Append a Documentation Updates section.** List the documentation files likely affected by the proposed changes, referencing `depends-on` frontmatter and cross-references. Include a reminder to update `## Referenced by` sections.
 
 7. **Append a History Updates section.** Remind the implementer to:
-   - Add a history file under `docs/project/history/` named `<isodate>-<topic>.md`
-   - Write it as human-oriented narrative prose (per project conventions)
-   - Update the [history index](docs/project/history/INDEX.md)
+   - Create a history directory under `docs/project/history/` named `<isodate>-<topic>/`
+   - Add a `summary.md` with narrative prose describing the proposal's evolution
+   - Add version files (`v1.md`, `v2.md`, etc.) as the proposal iterates
+   - Update the [history index](../../../docs/project/history/INDEX.md)
 
-8. **Save the output** to `docs/project/proposals/<name>.md` where `<name>` is derived from the RFP filename or the primary topic. If the proposals directory doesn't exist, create it. The proposal must reference the RFP, not the original prompt file.
+8. **Save the output** to `docs/project/proposals/<name>.md` where `<name>` is derived from the RFP filename or the primary topic. If the proposals directory doesn't exist, create it. The design proposal must reference the RFP, not the original prompt file.
 
 ## Output Format
 
-The saved proposal file should follow this structure:
+The saved design proposal file should follow this structure:
 
 ```markdown
 # Proposal: <Topic>
 
 *Generated from [<rfp-filename>](../rfp/<rfp-filename>) on <date>.*
+
+---
+
+## Decision Register
+
+All decisions made during design, consolidated here as the authoritative reference.
+
+| # | Decision | Outcome |
+|---|----------|---------|
+| 1 | <decision description> | <outcome or "pending"> |
+
+---
 
 ## Questions and Answers
 
@@ -94,6 +107,7 @@ The saved proposal file should follow this structure:
 <list of affected docs>
 
 ## History Updates
-- [ ] Add `docs/project/history/<date>-<topic>.md`
+- [ ] Create `docs/project/history/<date>-<topic>/` directory
+- [ ] Add `summary.md` with narrative prose
 - [ ] Update `docs/project/history/INDEX.md`
 ```

@@ -3,7 +3,7 @@ title: Development History
 category: project
 audience: [all]
 status: draft
-last-verified: 2026-03-11
+last-verified: 2026-03-18
 depends-on: [docs/INDEX.md]
 ---
 
@@ -11,12 +11,13 @@ depends-on: [docs/INDEX.md]
 
 Conversations between human and AI developers, showing how the project evolved and what factors were considered.
 
-Files are named `<isodate>-<topic>.md` for chronological sorting.
+Entries are named `<isodate>-<topic>` for chronological sorting. Each entry is either a single `.md` file or a directory containing a `summary.md` and separate version files.
 
 ---
 
-| Date | Topic | File |
-|------|-------|------|
+| Date | Topic | Location |
+|------|-------|----------|
+| 2026-03-18 | Proposal process improvements design | [2026-03-18-proposal-process-improvements/](2026-03-18-proposal-process-improvements/summary.md) |
 | 2026-03-15 | String syntax design and implementation | [2026-03-15-string-syntax.md](2026-03-15-string-syntax.md) |
 | 2026-03-14 | Language syntax design | [2026-03-14-language-syntax.md](2026-03-14-language-syntax.md) |
 | 2026-03-14 | Assurance Ledger design | [2026-03-14-assurance-ledger.md](2026-03-14-assurance-ledger.md) |
