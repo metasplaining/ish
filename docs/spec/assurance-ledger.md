@@ -93,6 +93,26 @@ Type checking (type compatibility on assignment, function call, and return) is i
 
 A **discrepancy** is a conflict detected by the audit. Two entries on the same item are incompatible, or a required entry is missing. Discrepancy reporting includes an audit trail tracing back through the chain of standards and statements that contributed to the conflict.
 
+### Entry Maintenance vs. Auditing
+
+The ledger performs two fundamentally different operations:
+
+- **Entry maintenance** — recording, updating, narrowing, and merging entries. This is always performed, regardless of the active standard. The ledger must maintain an accurate picture of the program's state at all times because other operations (narrowing, throw audit, catch matching) depend on correct entries.
+- **Auditing** — checking entries for discrepancies. This is governed by the active standard's feature states. The standard controls what is checked, when, and how strictly.
+
+The VM's role is to notify the ledger of program events (variable declarations, assignments, branch points, function calls, throws). The ledger decides what to do with those notifications. The VM does not gate ledger operations based on feature states — that is the ledger's responsibility.
+
+For example, type narrowing in an `if` branch always saves, narrows, and restores entry sets regardless of whether the `types` feature is active. The narrowing maintains accurate entries; whether a *discrepancy* is raised for a type mismatch depends on the active standard.
+
+### Assurance Level Semantics
+
+The assurance continuum does not go from "no checking" to "all checking." It goes from "all checking at runtime" to "all checking at build time (with runtime checks pruned where proven unnecessary)."
+
+- **Low assurance (streamlined)** abstracts concerns away from the developer. The developer does not need to think about types, null safety, or error declarations. But ish still performs all compatibility checks at runtime. The sub-optimal solution is to defer errors to runtime rather than catching them at build time.
+- **High assurance (rigorous)** performs checks at build time, proving that certain runtime checks cannot fail, and pruning them during optimization. High assurance *reduces* runtime overhead. This optimization is a future capability.
+
+The `streamlined` standard has no features. This means all checking happens at runtime with no annotation requirements — not that checking is disabled. A `let x: i32 = "hello"` is still an error in streamlined mode because the annotation is present and the value does not match.
+
 ---
 
 ## Entry Types
@@ -106,19 +126,12 @@ The following entry types are pre-registered at startup:
 | Entry type | Parent | Required properties | Description |
 |-----------|--------|-------------------|-------------|
 | `Error` | — | `message: String` | Error entry — marks a value as an error |
-| `CodedError` | `Error` | `code: String` | Error with a well-known code |
-| `SystemError` | `CodedError` | — | Interpreter-generated error |
-| `TypeError` | `CodedError` | — | Type mismatch or type system violation |
-| `ArgumentError` | `CodedError` | — | Incorrect argument count or type |
-| `FileError` | `CodedError` | — | File system operation failure |
-| `FileNotFoundError` | `FileError` | — | File does not exist |
-| `PermissionError` | `FileError` | — | Permission denied |
 | `Mutable` | — | — | Marks a variable/property as mutable |
 | `Type` | — | — | Structural type entry |
 | `Open` | — | — | Object is open to extra properties |
 | `Closed` | — | — | Object has exactly declared properties |
 
-Entry types support inheritance via `extends`. The `CodedError` entry type extends `Error`, inheriting its `message: String` requirement and adding `code: String`. `SystemError` extends `CodedError`. Domain error subtypes (`TypeError`, `ArgumentError`, `FileError`, etc.) extend `CodedError` to classify errors by source. See [docs/spec/errors.md](errors.md) for the full error hierarchy and throw audit semantics.
+`Error` is the only predefined error-related entry type. Other error classifications (`CodedError`, `SystemError`, `TypeError`, etc.) are ordinary ish types defined structurally — see [docs/spec/errors.md](errors.md) for the structural error hierarchy and throw audit semantics.
 
 ### Custom Entry Types
 
@@ -497,6 +510,7 @@ fn critical_calculation(values: List<f64>) -> f64 {
 
 ## Referenced by
 
+- [AGENTS.md](../../AGENTS.md)
 - [docs/spec/INDEX.md](INDEX.md)
 - [docs/spec/types.md](types.md)
 - [docs/spec/errors.md](errors.md)

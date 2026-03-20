@@ -98,47 +98,16 @@ impl EntryTypeRegistry {
         false
     }
 
-    /// Register built-in entry types: Error, CodedError, SystemError, Mutable, Type, Open, Closed.
+    /// Register built-in entry types: Error, Mutable, Type, Open, Closed.
+    ///
+    /// Only `@Error` is a predefined error entry type.  All other error
+    /// classifications (CodedError, SystemError, TypeError, etc.) are
+    /// structural ish types, not entry types.
     pub fn register_builtins(&mut self) {
         // Error — requires message: String
         self.register(
             EntryType::new("Error")
                 .with_required("message", "String")
-        );
-
-        // CodedError extends Error — additionally requires code: String
-        self.register(
-            EntryType::new("CodedError")
-                .with_parent("Error")
-                .with_required("code", "String")
-        );
-
-        // SystemError extends CodedError
-        self.register(
-            EntryType::new("SystemError")
-                .with_parent("CodedError")
-        );
-
-        // Domain subtypes of SystemError
-        self.register(
-            EntryType::new("TypeError")
-                .with_parent("SystemError")
-        );
-        self.register(
-            EntryType::new("ArgumentError")
-                .with_parent("SystemError")
-        );
-        self.register(
-            EntryType::new("FileError")
-                .with_parent("SystemError")
-        );
-        self.register(
-            EntryType::new("FileNotFoundError")
-                .with_parent("FileError")
-        );
-        self.register(
-            EntryType::new("PermissionError")
-                .with_parent("FileError")
         );
 
         // Mutable — no required properties (marker entry)
@@ -178,61 +147,73 @@ mod tests {
     #[test]
     fn resolve_required_properties_with_inheritance() {
         let mut reg = EntryTypeRegistry::new();
-        reg.register_builtins();
-        // CodedError extends Error, so it requires both message (from Error) and code.
-        let props = reg.resolve_required_properties("CodedError").unwrap();
+        // Register a custom child that extends Error
+        reg.register(
+            EntryType::new("Error")
+                .with_required("message", "String")
+        );
+        reg.register(
+            EntryType::new("Custom")
+                .with_parent("Error")
+                .with_required("code", "String")
+        );
+        let props = reg.resolve_required_properties("Custom").unwrap();
         assert!(props.iter().any(|p| p.name == "message"));
         assert!(props.iter().any(|p| p.name == "code"));
     }
 
     #[test]
-    fn resolve_system_error_inherits_coded_error() {
+    fn resolve_custom_child_inherits_error() {
         let mut reg = EntryTypeRegistry::new();
         reg.register_builtins();
-        let props = reg.resolve_required_properties("SystemError").unwrap();
-        // SystemError extends CodedError, so it inherits message and code.
+        // User-registered child of Error inherits message requirement
+        reg.register(
+            EntryType::new("Custom")
+                .with_parent("Error")
+                .with_required("detail", "String")
+        );
+        let props = reg.resolve_required_properties("Custom").unwrap();
         assert!(props.iter().any(|p| p.name == "message"));
-        assert!(props.iter().any(|p| p.name == "code"));
+        assert!(props.iter().any(|p| p.name == "detail"));
     }
 
     #[test]
     fn is_subtype_positive() {
         let mut reg = EntryTypeRegistry::new();
-        reg.register_builtins();
-        assert!(reg.is_subtype("SystemError", "CodedError"));
-        assert!(reg.is_subtype("SystemError", "Error"));
-        assert!(reg.is_subtype("CodedError", "Error"));
-        assert!(reg.is_subtype("Error", "Error")); // reflexive
+        // Register custom hierarchy for subtype testing
+        reg.register(EntryType::new("Base"));
+        reg.register(EntryType::new("Child").with_parent("Base"));
+        reg.register(EntryType::new("GrandChild").with_parent("Child"));
+        assert!(reg.is_subtype("Child", "Base"));
+        assert!(reg.is_subtype("GrandChild", "Base"));
+        assert!(reg.is_subtype("GrandChild", "Child"));
+        assert!(reg.is_subtype("Base", "Base")); // reflexive
     }
 
     #[test]
-    fn domain_subtype_hierarchy() {
+    fn custom_subtype_hierarchy() {
         let mut reg = EntryTypeRegistry::new();
-        reg.register_builtins();
-        // TypeError -> SystemError -> CodedError -> Error
-        assert!(reg.is_subtype("TypeError", "SystemError"));
-        assert!(reg.is_subtype("TypeError", "Error"));
-        // ArgumentError -> SystemError -> Error
-        assert!(reg.is_subtype("ArgumentError", "SystemError"));
-        assert!(reg.is_subtype("ArgumentError", "Error"));
-        // FileNotFoundError -> FileError -> SystemError -> Error
-        assert!(reg.is_subtype("FileNotFoundError", "FileError"));
-        assert!(reg.is_subtype("FileNotFoundError", "SystemError"));
-        assert!(reg.is_subtype("FileNotFoundError", "Error"));
-        // PermissionError -> FileError -> SystemError
-        assert!(reg.is_subtype("PermissionError", "FileError"));
-        assert!(reg.is_subtype("PermissionError", "SystemError"));
+        // Build a custom hierarchy for testing
+        reg.register(EntryType::new("A"));
+        reg.register(EntryType::new("B").with_parent("A"));
+        reg.register(EntryType::new("C").with_parent("B"));
+        reg.register(EntryType::new("D").with_parent("A"));
+        // C -> B -> A
+        assert!(reg.is_subtype("C", "B"));
+        assert!(reg.is_subtype("C", "A"));
+        // D -> A
+        assert!(reg.is_subtype("D", "A"));
         // Not subtypes of each other
-        assert!(!reg.is_subtype("TypeError", "ArgumentError"));
-        assert!(!reg.is_subtype("FileError", "TypeError"));
+        assert!(!reg.is_subtype("C", "D"));
+        assert!(!reg.is_subtype("D", "B"));
     }
 
     #[test]
     fn is_subtype_negative() {
         let mut reg = EntryTypeRegistry::new();
         reg.register_builtins();
-        assert!(!reg.is_subtype("Error", "CodedError"));
         assert!(!reg.is_subtype("Mutable", "Error"));
+        assert!(!reg.is_subtype("Error", "Mutable"));
     }
 
     #[test]
@@ -240,11 +221,17 @@ mod tests {
         let mut reg = EntryTypeRegistry::new();
         reg.register_builtins();
         for name in &[
-            "Error", "CodedError", "SystemError",
-            "TypeError", "ArgumentError", "FileError", "FileNotFoundError", "PermissionError",
+            "Error",
             "Mutable", "Type", "Open", "Closed",
         ] {
             assert!(reg.get(name).is_some(), "missing builtin entry type: {}", name);
+        }
+        // Verify removed types are NOT registered
+        for name in &[
+            "CodedError", "SystemError", "TypeError",
+            "ArgumentError", "FileError", "FileNotFoundError", "PermissionError",
+        ] {
+            assert!(reg.get(name).is_none(), "should not have builtin entry type: {}", name);
         }
     }
 }

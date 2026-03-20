@@ -45,9 +45,9 @@ assert_output "throw from function" "inner" "$output"
 output=$(run_ish 'try { try { throw { message: "deep" } } catch (e) { throw e } } catch (e2) { println(error_message(e2)) }')
 assert_output "re-throw" "deep" "$output"
 
-# Throw non-error value
-output=$(run_ish 'try { throw "plain string" } catch (e) { println(e) }')
-assert_output "throw non-error value" "plain string" "$output"
+# Throw non-error value (gets wrapped by throw audit)
+output=$(run_ish 'try { throw "plain string" } catch (e) { println(e.original) }')
+assert_output "throw non-error value wrapped" "plain string" "$output"
 
 # Error exit code from runtime error
 assert_exit_code "undefined var runtime error" 1 'println(undefined_var)'

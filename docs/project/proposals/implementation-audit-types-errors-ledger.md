@@ -1,0 +1,332 @@
+---
+title: "Proposal: Implementation Audit — Types, Errors, and Assurance Ledger"
+category: proposal
+audience: [human-dev, ai-agent]
+status: accepted
+last-verified: 2026-03-20
+depends-on:
+  - docs/project/rfp/implementation-audit-types-errors-ledger.md
+  - docs/spec/assurance-ledger.md
+  - docs/spec/errors.md
+  - docs/spec/types.md
+  - docs/project/plans/types-errors-assurance-consistency.md
+  - docs/project/proposals/types-errors-assurance-consistency.md
+  - docs/project/proposals/defer-scoping.md
+  - docs/project/proposals/error-handling.md
+---
+
+# Proposal: Implementation Audit — Types, Errors, and Assurance Ledger
+
+*Generated from [implementation-audit-types-errors-ledger.md](../rfp/implementation-audit-types-errors-ledger.md) on 2026-03-20. Revised 2026-03-20.*
+
+---
+
+## Decision Register
+
+All decisions made during design, consolidated here as the authoritative reference.
+
+| # | Decision | Outcome |
+|---|----------|---------|
+| 1 | Remove `types` feature gate from type narrowing in interpreter | Yes — narrowing always runs unconditionally |
+| 2 | Remove `types` feature gate from throw audit in interpreter | Yes — throw audit always runs unconditionally |
+| 3 | Address incomplete throw audit (missing auto-annotation) | Yes — implement full throw audit spec in this fix |
+| 4 | Add "Entry Maintenance vs. Auditing" principle to spec | Yes — add to assurance-ledger.md |
+| 5 | Add builtins for ledger observability | Both `ledger_state()` and `has_entry()`. TODO: `ledger_state` should eventually return a complex object with `to_string` conversion (deferred — depends on generic `to_string` mechanism) |
+| 6 | Rewrite type narrowing acceptance tests | Yes — assert ledger state, not just printed constants |
+| 7 | Adopt structural error hierarchy model | Yes — only `@Error` entry type is predefined. `CodedError`, domain types, `SystemError` are ordinary ish types defined in the spec and tests, not in the Rust implementation. They will move to the standard library when module/package support is complete. |
+| 8 | Remove domain error entry types from Rust implementation | Yes — remove `TypeError`, `ArgumentError`, `FileError`, `FileNotFoundError`, `PermissionError`, `SystemError`, `CodedError` as registered entry types. Only `Error` remains as a predefined entry type. |
+| 9 | Fix `defer` scoping language in errors.md | Yes — change to function-scoped per accepted defer-scoping proposal |
+| 10 | Always check present type annotations | Yes — `audit_type_annotation` checks compatibility whenever an annotation is present, regardless of active standard. Missing-annotation discrepancy requires the `types` feature at `required`. |
+| 11 | Clarify assurance level semantics in spec | Yes — low assurance does not disable checking; it defers to runtime. High assurance reduces runtime overhead by proving checks at build time and pruning them during optimization. |
+
+---
+
+## Questions and Answers
+
+### Q: Does the spec clearly state that entry maintenance (narrowing, entry tracking) should always be performed regardless of active standard?
+
+**Partially.** The assurance-ledger spec says:
+
+> Type narrowing is not a separate pass — it is the natural consequence of the ledger maintaining entry sets through control flow.
+
+This implies narrowing is unconditional. The spec also says:
+
+> The VM always checks type compatibility; the standard determines *when* (runtime vs. build) and *how strictly* (optional vs. required annotations).
+
+However, the spec conflates two distinct operations:
+
+1. **Entry maintenance** — recording facts in the ledger (type entries, narrowing, actual-value tracking). This always happens because the ledger exists to *record* facts, not to *enforce* them.
+2. **Auditing** — checking entries for discrepancies (type mismatches, missing annotations). This is governed by the active standard's feature states.
+
+The spec does not explicitly draw this distinction in a summary statement. The implementing agent interpreted "when the types feature is active" as a condition for all type-related operations, including entry maintenance. Per Decision 4, the spec will be updated with an explicit "Entry Maintenance vs. Auditing" section.
+
+### Q: Are there other meaning changes introduced during the spec rewrite that were not requested by the proposal?
+
+**One unintended regression was found.** All other changes matched requested decisions:
+
+1. **Audit mode naming (intentional).** `optional`/`live`/`pre` → two-dimension model (`type_annotations` + `type_audit`). Decision 14 in the prior proposal.
+2. **Value entries (intentional).** Three new entry kinds added. Decision 17 in the prior proposal.
+3. **Entry type section (intentional).** Built-in entry types table. Decisions 3 and 16 in the prior proposal.
+4. **`defer` scoping regression (unintended).** The errors.md spec said `defer` is block-scoped. This contradicts the accepted defer-scoping proposal. Fixed per Decision 9.
+
+### Q: Did the spec rewrite lose the `defer` scoping decision?
+
+**Yes.** The error-handling proposal originally deferred defer scoping as an open question. A separate proposal (defer-scoping.md) resolved it in favor of function scoping. The open-questions.md file records this resolution. When errors.md was written during the consistency rewrite, it included "defer is scoped to the enclosing block, not the function" — copying the initial intuition from the error-handling proposal without checking the subsequent resolution. Per Decision 9, this will be corrected.
+
+### Q: How do assurance levels affect runtime behavior?
+
+**Low assurance does not disable checking.** This is a fundamental design principle that the spec needs to state more clearly (Decision 11).
+
+- **Low assurance (streamlined)** abstracts concerns away from the developer. The developer does not need to think about types, null safety, or error declarations — but ish still performs all checks at runtime. The sub-optimal solution is to defer errors to runtime rather than catching them at build time.
+- **High assurance (rigorous)** performs checks at build time, proving that certain runtime checks cannot fail, and pruning them during optimization. High assurance *reduces* runtime overhead.
+
+The assurance continuum does not go from "no checking" to "all checking." It goes from "all checking at runtime" to "all checking at build time (with runtime checks pruned where proven unnecessary)."
+
+---
+
+## Issue 1: VM Gates Type Narrowing on `types` Feature
+
+### Problem
+
+In `proto/ish-vm/src/interpreter.rs`, the `if` statement handler checks `features.contains_key("types")` and only performs entry narrowing (snapshot, narrow, restore, merge) when this check passes. Without the check, the VM falls through to a simple if/else that skips all ledger maintenance.
+
+This is broken because:
+
+- Entry maintenance must always happen regardless of which standard is active.
+- Even without the `types` feature, other features may create entries that need save/restore through branches.
+- Skipping save/restore causes entries from inside a branch to leak into post-branch code.
+
+### Resolution (Decision 1)
+
+Remove the `types_active` check entirely. The narrowing logic always executes:
+
+1. Analyze the condition for narrowing facts.
+2. Save the entry snapshot.
+3. Apply narrowing facts to the appropriate branch.
+4. Execute the branch.
+5. Restore entries and merge.
+
+**Files affected:**
+- `proto/ish-vm/src/interpreter.rs` — remove the `types_active` conditional, collapse the two code paths into one.
+
+---
+
+## Issue 2: VM Gates Throw Audit on `types` Feature
+
+### Problem
+
+In `proto/ish-vm/src/interpreter.rs`, the `Statement::Throw` handler checks `active_features().contains_key("types")` before performing the throw audit. Without the check, the throw audit is skipped entirely.
+
+Additionally, the throw audit implementation is incomplete — it only checks for `message` but does not:
+- Auto-add `@Error` entry to objects with `message: String`.
+- Wrap non-qualifying thrown values in a system error.
+
+### Resolution (Decisions 2, 3)
+
+Remove the feature gate. Implement the full throw audit per spec. Per Decision 8, `@Error` is the only predefined entry type — the throw audit adds `@Error` entries only. Whether an error has a `code` property is observed structurally by the type system, not by the throw audit.
+
+**Throw audit rules:**
+
+1. **Object with `message: String`** → auto-add `@Error` entry if not already present.
+2. **Object without `message: String`** → discrepancy. Wrap in a system error object: `{ message: "throw audit: thrown value does not qualify as an error", code: "E001", original: <value> }` with an `@Error` entry.
+3. **Non-object value** → discrepancy. Wrap as above.
+
+**Files affected:**
+- `proto/ish-vm/src/interpreter.rs` — remove feature gate, implement full throw audit.
+
+---
+
+## Issue 3: Spec Clarity — Entry Maintenance vs. Auditing
+
+### Problem
+
+The assurance-ledger spec does not explicitly distinguish between entry maintenance (always happens) and auditing (governed by standards). This ambiguity caused the implementing agent to gate all type-related operations on the `types` feature.
+
+### Resolution (Decision 4)
+
+Add a subsection to assurance-ledger.md under **Concepts** titled **Entry Maintenance vs. Auditing**:
+
+- **Entry maintenance** (recording, updating, narrowing, merging entries) is always performed. The ledger maintains an accurate picture of the program's state at all times, regardless of which standard is active.
+- **Auditing** (checking for discrepancies) is governed by the active standard's feature states.
+- The VM notifies the ledger of program events. The ledger performs both maintenance and auditing. The VM does not decide what the ledger should or should not do.
+
+**Files affected:**
+- `docs/spec/assurance-ledger.md` — add subsection after "Discrepancies" and before "Entry Types".
+
+---
+
+## Issue 4: Assurance Level Semantics Clarification
+
+### Problem
+
+The spec does not clearly state that low-assurance ish still performs all checks at runtime. The implementing agent's code implicitly assumes that "no types feature" means "no type-related operations," which reflects a misunderstanding of the assurance continuum.
+
+### Resolution (Decision 11)
+
+Add a subsection to assurance-ledger.md titled **Assurance Level Semantics** that states the principle:
+
+- The assurance continuum goes from "all checking at runtime" (low assurance) to "all checking at build time with runtime checks pruned where proven unnecessary" (high assurance).
+- Low assurance does not disable checking. It defers it to runtime. The developer does not need to annotate or think about types, but type compatibility is still checked at runtime.
+- High assurance reduces runtime overhead by proving checks at build time and optimizing away proven-unnecessary runtime checks. This high-assurance optimization is a future capability.
+- The `streamlined` standard has no features — but this means all checking happens at runtime with no annotation requirements, not that checking is disabled.
+
+**Files affected:**
+- `docs/spec/assurance-ledger.md` — add "Assurance Level Semantics" subsection.
+
+---
+
+## Issue 5: Acceptance Test Observability
+
+### Problem
+
+The type narrowing acceptance tests only assert printed constants, not ledger state. All 8 tests pass identically whether or not narrowing occurs.
+
+### Resolution (Decisions 5, 6)
+
+Add two builtins for ledger observability:
+
+- **`ledger_state(variable_name)`** — returns a string representation of all entries on the variable (e.g., `"Type(i32), ExcludeNull"`). Intended for debugging and exploration.
+- **`has_entry(variable_name, entry_type)`** — returns `true`/`false` for whether the variable has an entry of the given type. Intended for precise assertions.
+
+**Deferred work (TODO):** `ledger_state` should eventually return a complex object, not a string. The test code should call a `to_string` function to convert it to a string. This depends on a generic `to_string` mechanism that is out of scope for this proposal.
+
+Rewrite the type narrowing acceptance tests to assert ledger state:
+
+- Each test should verify that expected narrowing entries are present (or absent) at the relevant program point.
+- The "no types feature no crash" test should be updated to also verify ledger state is correct even without a standard.
+- Add an `assert_contains` helper to the test library for partial string matching.
+
+Remove the `typed_std` standard from tests — narrowing should work without any standard active (per Decision 1).
+
+**Files affected:**
+- `proto/ish-vm/src/builtins.rs` — add `ledger_state` and `has_entry` stubs.
+- `proto/ish-vm/src/interpreter.rs` — add VM interception for both.
+- `proto/ish-tests/type_narrowing/type_narrowing.sh` — rewrite tests.
+- `proto/ish-tests/lib/test_lib.sh` — add `assert_contains` helper.
+
+---
+
+## Issue 6: Structural Error Hierarchy
+
+### Problem
+
+The current implementation defines error types (`CodedError`, `SystemError`, `TypeError`, `ArgumentError`, `FileError`, `FileNotFoundError`, `PermissionError`) as built-in entry types in the Rust code, using an inheritance model. This contradicts the intended structural model.
+
+### Resolution (Decisions 7, 8)
+
+Adopt the structural error hierarchy:
+
+- **`@Error` is the only predefined entry type.** It requires `message: String`. The throw audit adds this entry to qualifying thrown objects. This is the only error-related entry type registered in Rust.
+- **`CodedError` is an ordinary ish type**, not an entry type. Defined structurally:
+  ```ish
+  type CodedError = Error & { code: String }
+  ```
+- **Leaf error types are ordinary ish types** defined by their code value:
+  ```ish
+  type FileNotFoundError = CodedError & { code: "E008" }
+  type TypeError = CodedError & { code: "E004" }
+  ```
+- **Domain union types group related leaf errors:**
+  ```ish
+  type FileError = FileNotFoundError | PermissionError
+  type SystemError = TypeError | ArgumentError | FileError | ...
+  ```
+
+The key insight is that `SystemError` is defined *in terms of* the domain types (as a union), not as their parent. A `FileNotFoundError` is a `SystemError` because `SystemError` includes it in its union — not because `FileNotFoundError` inherits from `SystemError`.
+
+**For now:** Define these types in the spec and in acceptance tests. Do not include them in the Rust implementation. They will move to the standard library when the module/package system is complete.
+
+**In the Rust implementation:**
+- Remove all error-related entry type registrations except `Error` from `entry_type.rs`.
+- Remove `CodedError`, `SystemError`, `TypeError`, `ArgumentError`, `FileError`, `FileNotFoundError`, `PermissionError` from the builtin registry.
+- Update any code that references these entry types (e.g., `is_subtype` checks in catch matching) to use structural property checks instead.
+
+**Files affected:**
+- `proto/ish-vm/src/ledger/entry_type.rs` — remove all error entry types except `Error`.
+- `proto/ish-vm/src/interpreter.rs` — update throw/catch to use structural checks.
+- `docs/spec/errors.md` — update error hierarchy section to reflect structural model.
+- `docs/spec/assurance-ledger.md` — update built-in entry types table.
+- `proto/ish-tests/error_handling/` — define error types in tests using ish type syntax.
+
+---
+
+## Issue 7: `defer` Scoping in errors.md
+
+### Problem
+
+`docs/spec/errors.md` says "`defer` is scoped to the enclosing block, not the function." This contradicts the accepted defer-scoping proposal, the open-questions resolution, and the implementation.
+
+### Resolution (Decision 9)
+
+Change to:
+
+> `defer` is scoped to the enclosing function. Deferred statements accumulate in a per-function LIFO stack and execute when the function exits — not when the enclosing block exits. This follows [the defer-scoping proposal](../project/proposals/defer-scoping.md), which chose function scoping so that resources acquired in dynamic control flow (loops, conditionals) can be cleaned up in reverse acquisition order at function exit.
+
+**Files affected:**
+- `docs/spec/errors.md` — fix defer scoping language and add cross-reference.
+
+---
+
+## Issue 8: `audit_type_annotation` Always Checks Present Annotations
+
+### Problem
+
+The `audit_type_annotation` method returns early when no `types` feature is active, skipping both type compatibility checks and missing-annotation discrepancies.
+
+### Resolution (Decision 10)
+
+Refactor `audit_type_annotation` to separate two concerns:
+
+1. **Type compatibility:** When an annotation is present, always check that the value matches it, regardless of active standard. If `let x: i32 = "hello"` appears in any code, it is an error. Annotations are always meaningful.
+
+2. **Missing annotation discrepancy:** When no annotation is present, only report a missing-annotation discrepancy if the `types` feature is active at `required` level. If the `types` feature is absent or `optional`, missing annotations are not an error.
+
+This means the early return `None => return Ok(())` must be removed. The method should:
+- If an annotation is present: always check compatibility. Ignore the `types` feature for this check.
+- If no annotation is present: check the `types` feature. If present and `required`, report a discrepancy. Otherwise, no error.
+
+**Files affected:**
+- `proto/ish-vm/src/interpreter.rs` — refactor `audit_type_annotation`.
+
+---
+
+## Additional Findings
+
+### Finding A: "No Types Feature" Test Should Verify Ledger State
+
+Test case "no types feature no crash" passes because narrowing is skipped entirely. After the fix, it will still pass (narrowing without entries is a no-op), but the test should be updated to verify ledger state is correct. Addressed as part of Issue 5.
+
+### Finding B: `assert_contains` Needed in Test Library
+
+The test library needs an `assert_contains` helper. Addressed as part of Issue 5.
+
+### Finding C: `undeclared_errors` Feature Absent vs. `any`
+
+The `streamlined` standard's empty feature map means `undeclared_errors` is absent, not `any`. Per Decision 11 and the assurance level semantics clarification, absent means "not enforced" — functions may throw any error without discrepancy. This is equivalent to `any` in practice, but code that checks `features.get("undeclared_errors")` should treat `None` as permissive. No code change needed — just verify existing code handles `None` correctly.
+
+---
+
+## Documentation Updates
+
+The following documentation files will be affected:
+
+- [docs/spec/assurance-ledger.md](../../spec/assurance-ledger.md) — add "Entry Maintenance vs. Auditing" principle, add "Assurance Level Semantics", update built-in entry types table (remove error types except `Error`)
+- [docs/spec/errors.md](../../spec/errors.md) — fix `defer` scoping, update error hierarchy to structural model, update error type definitions to show ish type syntax
+- [docs/architecture/vm.md](../../architecture/vm.md) — update to reflect VM/ledger separation principle, document structural error model
+- [docs/errors/INDEX.md](../../errors/INDEX.md) — update domain subtype column to reflect structural hierarchy
+- [AGENTS.md](../../../AGENTS.md) — update test counts after test rewrites
+- All modified files: update `## Referenced by` sections
+
+---
+
+## History Updates
+
+- [ ] Create `docs/project/history/2026-03-20-implementation-audit-types-errors-ledger/` directory
+- [ ] Add `summary.md` with narrative prose describing the proposal's evolution
+- [ ] Update `docs/project/history/INDEX.md`
+
+---
+
+## Referenced by
+
+- [docs/project/proposals/INDEX.md](INDEX.md)

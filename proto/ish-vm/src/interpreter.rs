@@ -189,67 +189,53 @@ impl IshVm {
             } => {
                 let cond = self.eval_expression(condition, env)?;
 
-                // Type narrowing: when types feature is active, analyze
-                // the condition and apply narrowing facts to each branch.
-                let features = self.ledger.active_features();
-                let types_active = features.contains_key("types");
+                // Type narrowing: always analyze the condition and apply
+                // narrowing facts.  Entry maintenance is unconditional.
+                use crate::ledger::narrowing::{analyze_condition, invert_for_else, NarrowingFact};
 
-                if types_active {
-                    use crate::ledger::narrowing::{analyze_condition, invert_for_else, NarrowingFact};
+                let facts = analyze_condition(condition);
+                let snapshot = self.ledger.save_entries();
 
-                    let facts = analyze_condition(condition);
-                    let snapshot = self.ledger.save_entries();
-
-                    if cond.is_truthy() {
-                        // Apply facts to true branch.
-                        for fact in &facts {
-                            match fact {
-                                NarrowingFact::IsType { variable, type_name } => {
-                                    self.ledger.narrow_type(variable, type_name);
-                                }
-                                NarrowingFact::NotNull { variable } => {
-                                    self.ledger.narrow_exclude_null(variable);
-                                }
-                                NarrowingFact::IsNull { .. } => {
-                                    // IsNull in true branch: no narrowing benefit.
-                                }
+                if cond.is_truthy() {
+                    // Apply facts to true branch.
+                    for fact in &facts {
+                        match fact {
+                            NarrowingFact::IsType { variable, type_name } => {
+                                self.ledger.narrow_type(variable, type_name);
+                            }
+                            NarrowingFact::NotNull { variable } => {
+                                self.ledger.narrow_exclude_null(variable);
+                            }
+                            NarrowingFact::IsNull { .. } => {
+                                // IsNull in true branch: no narrowing benefit.
                             }
                         }
-                        let result = self.exec_statement(then_block, env);
-                        let then_entries = self.ledger.save_entries();
-                        self.ledger.restore_entries(snapshot);
-                        self.ledger.merge_entries(then_entries, self.ledger.save_entries());
-                        result
-                    } else if let Some(eb) = else_block {
-                        let else_facts = invert_for_else(&facts);
-                        for fact in &else_facts {
-                            match fact {
-                                NarrowingFact::IsType { variable, type_name } => {
-                                    self.ledger.narrow_type(variable, type_name);
-                                }
-                                NarrowingFact::NotNull { variable } => {
-                                    self.ledger.narrow_exclude_null(variable);
-                                }
-                                NarrowingFact::IsNull { .. } => {}
-                            }
-                        }
-                        let result = self.exec_statement(eb, env);
-                        let else_entries = self.ledger.save_entries();
-                        self.ledger.restore_entries(snapshot);
-                        self.ledger.merge_entries(self.ledger.save_entries(), else_entries);
-                        result
-                    } else {
-                        Ok(ControlFlow::None)
                     }
+                    let result = self.exec_statement(then_block, env);
+                    let then_entries = self.ledger.save_entries();
+                    self.ledger.restore_entries(snapshot);
+                    self.ledger.merge_entries(then_entries, self.ledger.save_entries());
+                    result
+                } else if let Some(eb) = else_block {
+                    let else_facts = invert_for_else(&facts);
+                    for fact in &else_facts {
+                        match fact {
+                            NarrowingFact::IsType { variable, type_name } => {
+                                self.ledger.narrow_type(variable, type_name);
+                            }
+                            NarrowingFact::NotNull { variable } => {
+                                self.ledger.narrow_exclude_null(variable);
+                            }
+                            NarrowingFact::IsNull { .. } => {}
+                        }
+                    }
+                    let result = self.exec_statement(eb, env);
+                    let else_entries = self.ledger.save_entries();
+                    self.ledger.restore_entries(snapshot);
+                    self.ledger.merge_entries(self.ledger.save_entries(), else_entries);
+                    result
                 } else {
-                    // No type narrowing — simple if/else.
-                    if cond.is_truthy() {
-                        self.exec_statement(then_block, env)
-                    } else if let Some(eb) = else_block {
-                        self.exec_statement(eb, env)
-                    } else {
-                        Ok(ControlFlow::None)
-                    }
+                    Ok(ControlFlow::None)
                 }
             }
 
@@ -328,21 +314,49 @@ impl IshVm {
 
             Statement::Throw { value } => {
                 let val = self.eval_expression(value, env)?;
-                // Throw audit: when the types feature is active, verify the
-                // thrown value qualifies as an error object.
-                if self.ledger.active_features().contains_key("types") {
-                    if let Value::Object(ref obj_ref) = val {
+                // Throw audit (unconditional): ensure the thrown value
+                // qualifies as an error and add @Error entry.
+                use crate::ledger::entry::Entry;
+                let thrown = match &val {
+                    Value::Object(ref obj_ref) => {
                         let map = obj_ref.borrow();
                         let has_message = matches!(map.get("message"), Some(Value::String(_)));
-                        if !has_message {
-                            return Err(RuntimeError::system_error(
-                                "throw audit: thrown object must have a 'message: String' property",
-                                "E004",
-                            ));
+                        if has_message {
+                            // (a) Object with message: String → add @Error entry
+                            drop(map);
+                            self.ledger.add_entry("@thrown",
+                                Entry::new("Error").with_param("message", "String"));
+                            val
+                        } else {
+                            // (b) Object without message: String → wrap in system error
+                            drop(map);
+                            let mut wrapper = HashMap::new();
+                            wrapper.insert("message".to_string(), Value::String(Rc::new(
+                                "throw audit: thrown object lacks 'message: String' property".to_string()
+                            )));
+                            wrapper.insert("code".to_string(), Value::String(Rc::new("E001".to_string())));
+                            wrapper.insert("original".to_string(), val);
+                            let wrapped = new_object(wrapper);
+                            self.ledger.add_entry("@thrown",
+                                Entry::new("Error").with_param("message", "String"));
+                            wrapped
                         }
                     }
-                }
-                Ok(ControlFlow::Throw(val))
+                    _ => {
+                        // (c) Non-object → wrap in system error
+                        let mut wrapper = HashMap::new();
+                        wrapper.insert("message".to_string(), Value::String(Rc::new(
+                            format!("throw audit: non-object thrown: {}", val)
+                        )));
+                        wrapper.insert("code".to_string(), Value::String(Rc::new("E001".to_string())));
+                        wrapper.insert("original".to_string(), val);
+                        let wrapped = new_object(wrapper);
+                        self.ledger.add_entry("@thrown",
+                            Entry::new("Error").with_param("message", "String"));
+                        wrapped
+                    }
+                };
+                Ok(ControlFlow::Throw(thrown))
             }
 
             Statement::TryCatch { body, catches, finally } => {
@@ -977,6 +991,8 @@ impl IshVm {
                 "feature_state" => self.builtin_feature_state(args),
                 "has_standard" => self.builtin_has_standard(args),
                 "has_entry_type" => self.builtin_has_entry_type(args),
+                "ledger_state" => self.builtin_ledger_state(args),
+                "has_entry" => self.builtin_has_entry(args),
                 _ => (b.func)(args),
             },
             _ => Err(RuntimeError::system_error(format!(
@@ -988,26 +1004,20 @@ impl IshVm {
 
     // ── Type audit helper ─────────────────────────────────────────────────
 
-    /// Audit a value against a type annotation, respecting the active standard.
+    /// Audit a value against a type annotation.
     ///
-    /// - If no standard is active (streamlined), no checking is performed.
-    /// - If types feature is `required` and annotation is missing → error.
-    /// - If annotation is present and value doesn't match → error.
+    /// - If annotation is present, always check compatibility (unconditional).
+    /// - If annotation is absent, report a discrepancy only when the `types`
+    ///   feature is `required` in the active standard.
     fn audit_type_annotation(
         &self,
         item_name: &str,
         value: &Value,
         annotation: Option<&ish_ast::TypeAnnotation>,
     ) -> Result<(), RuntimeError> {
-        let features = self.ledger.active_features();
-        let types_feature = match features.get("types") {
-            Some(fs) => fs,
-            None => return Ok(()), // no types feature active → no checking
-        };
-
         match annotation {
             Some(type_ann) => {
-                // Annotation present — check compatibility.
+                // Annotation present — always check compatibility.
                 if !crate::ledger::type_compat::is_compatible(value, type_ann) {
                     return Err(RuntimeError::system_error(format!(
                         "type mismatch for '{}': expected {:?}, got {}",
@@ -1019,13 +1029,16 @@ impl IshVm {
             }
             None => {
                 // No annotation — only an error if annotation is required.
-                if types_feature.annotation
-                    == crate::ledger::standard::AnnotationDimension::Required
-                {
-                    return Err(RuntimeError::system_error(format!(
-                        "missing type annotation for '{}' (required by active standard)",
-                        item_name
-                    ), "E004"));
+                let features = self.ledger.active_features();
+                if let Some(types_feature) = features.get("types") {
+                    if types_feature.annotation
+                        == crate::ledger::standard::AnnotationDimension::Required
+                    {
+                        return Err(RuntimeError::system_error(format!(
+                            "missing type annotation for '{}' (required by active standard)",
+                            item_name
+                        ), "E004"));
+                    }
                 }
             }
         }
@@ -1093,6 +1106,50 @@ impl IshVm {
             Ok(Value::Bool(self.ledger.entry_type_registry.get(name).is_some()))
         } else {
             Err(RuntimeError::system_error("has_entry_type expects a string argument", "E004"))
+        }
+    }
+
+    /// ledger_state(variable_name) -> String
+    /// Returns a string representation of all entries on a variable,
+    /// e.g. "Type(i32), ExcludeNull".
+    fn builtin_ledger_state(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if args.len() != 1 {
+            return Err(RuntimeError::system_error("ledger_state expects 1 argument", "E010"));
+        }
+        if let Value::String(name) = &args[0] {
+            let desc = match self.ledger.get_entries(name) {
+                Some(es) => {
+                    es.entries.iter().map(|e| {
+                        if e.params.is_empty() {
+                            e.entry_type.clone()
+                        } else {
+                            let params: Vec<String> = e.params.iter()
+                                .map(|(k, v)| format!("{}: {}", k, v))
+                                .collect();
+                            format!("{}({})", e.entry_type, params.join(", "))
+                        }
+                    }).collect::<Vec<_>>().join(", ")
+                }
+                None => String::new(),
+            };
+            Ok(Value::String(Rc::new(desc)))
+        } else {
+            Err(RuntimeError::system_error("ledger_state expects a string argument", "E004"))
+        }
+    }
+
+    /// has_entry(variable_name, entry_type) -> Bool
+    fn builtin_has_entry(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if args.len() != 2 {
+            return Err(RuntimeError::system_error("has_entry expects 2 arguments", "E010"));
+        }
+        match (&args[0], &args[1]) {
+            (Value::String(var), Value::String(entry_type)) => {
+                Ok(Value::Bool(self.ledger.has_entry(var, entry_type)))
+            }
+            _ => Err(RuntimeError::system_error(
+                "has_entry expects (string, string) arguments", "E004"
+            )),
         }
     }
 
@@ -1782,13 +1839,17 @@ mod tests {
     #[test]
     fn test_try_catch_returns_caught_value() {
         // fn test() { try { throw 42; } catch(e) { return e; } }
-        // test()  -> 42
+        // Throw audit wraps non-object values, so e is a wrapped object
+        // with an "original" field containing the original value.
         let program = ProgramBuilder::new()
             .function("test", &[], |b| {
                 b.try_catch(
                     |b| b.throw(Expression::int(42)),
                     vec![CatchClause::new("e", Statement::block(vec![
-                        Statement::ret(Some(Expression::ident("e"))),
+                        Statement::ret(Some(Expression::property(
+                            Expression::ident("e"),
+                            "original",
+                        ))),
                     ]))],
                     None::<fn(BlockBuilder) -> BlockBuilder>,
                 )
@@ -1877,9 +1938,9 @@ mod tests {
     fn test_throw_from_function_caught_by_caller() {
         // fn bad() { throw 99; }
         // fn wrapper() {
-        //   try { bad(); } catch(e) { return e; }
+        //   try { bad(); } catch(e) { return e.original; }
         // }
-        // wrapper()  -> 99
+        // wrapper()  -> 99  (throw audit wraps non-object values)
         let program = ProgramBuilder::new()
             .function("bad", &[], |b| {
                 b.throw(Expression::int(99))
@@ -1888,7 +1949,10 @@ mod tests {
                 b.try_catch(
                     |b| b.expr_stmt(Expression::call(Expression::ident("bad"), vec![])),
                     vec![CatchClause::new("e", Statement::block(vec![
-                        Statement::ret(Some(Expression::ident("e"))),
+                        Statement::ret(Some(Expression::property(
+                            Expression::ident("e"),
+                            "original",
+                        ))),
                     ]))],
                     None::<fn(BlockBuilder) -> BlockBuilder>,
                 )
@@ -2754,19 +2818,33 @@ test()
     }
 
     #[test]
-    fn throw_audit_skipped_without_types_feature() {
-        // Without a standard, throwing any value is allowed (no audit).
-        // throw "plain string" -> RuntimeError but no audit complaint
+    fn throw_audit_wraps_without_standard() {
+        // Throw audit is unconditional: even without a standard active,
+        // throwing a non-object wraps it in a system error object.
+        // throw "plain string" -> wrapped in { message: "...", original: "plain" }
         let program = ProgramBuilder::new()
-            .stmt(Statement::throw(Expression::string("plain")))
+            .function("test", &[], |b| {
+                b.try_catch(
+                    |b| b.throw(Expression::string("plain")),
+                    vec![CatchClause::new("e", Statement::block(vec![
+                        Statement::ret(Some(Expression::property(
+                            Expression::ident("e"),
+                            "message",
+                        ))),
+                    ]))],
+                    None::<fn(BlockBuilder) -> BlockBuilder>,
+                )
+            })
+            .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
             .build();
         let mut vm = IshVm::new();
-        let result = vm.run(&program);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        // The error is an unhandled throw, not an audit failure
-        assert!(err.message.contains("plain"));
-        assert!(!err.message.contains("throw audit"));
+        let result = vm.run(&program).unwrap();
+        // The message should contain "throw audit" to indicate wrapping occurred
+        if let Value::String(s) = &result {
+            assert!(s.contains("throw audit"), "expected throw audit message, got: {}", s);
+        } else {
+            panic!("expected String result, got {:?}", result);
+        }
     }
 
     #[test]

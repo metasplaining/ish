@@ -184,8 +184,12 @@ mod tests {
     #[test]
     fn new_has_builtin_entry_types() {
         let state = LedgerState::new();
-        for name in &["Error", "CodedError", "SystemError", "Mutable", "Type", "Open", "Closed"] {
+        for name in &["Error", "Mutable", "Type", "Open", "Closed"] {
             assert!(state.entry_type_registry.get(name).is_some(), "missing: {}", name);
+        }
+        // Structural error types are NOT entry types
+        for name in &["CodedError", "SystemError"] {
+            assert!(state.entry_type_registry.get(name).is_none(), "should not be registered: {}", name);
         }
     }
 

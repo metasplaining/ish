@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// is an error.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
-    /// The entry type name (e.g., "Type", "Mutable", "Error", "CodedError").
+    /// The entry type name (e.g., "Type", "Mutable", "Error").
     pub entry_type: String,
     /// Parameters for this entry (e.g., for a Type entry: {"type": "i32"}).
     pub params: HashMap<String, String>,

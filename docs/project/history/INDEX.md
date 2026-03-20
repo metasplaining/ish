@@ -17,6 +17,7 @@ Entries are named `<isodate>-<topic>` for chronological sorting. Each entry is e
 
 | Date | Topic | Location |
 |------|-------|----------|
+| 2026-03-20 | Implementation audit — types, errors, and assurance ledger | [2026-03-20-implementation-audit-types-errors-ledger/](2026-03-20-implementation-audit-types-errors-ledger/summary.md) |
 | 2026-03-19 | Rename /plan skill to /plan-implementation | [2026-03-19-rename-plan-skill/](2026-03-19-rename-plan-skill/summary.md) |
 | 2026-03-19 | Types, errors, and assurance ledger consistency audit | [2026-03-19-types-errors-assurance-consistency/](2026-03-19-types-errors-assurance-consistency/summary.md) |
 | 2026-03-18 | Proposal process improvements design | [2026-03-18-proposal-process-improvements/](2026-03-18-proposal-process-improvements/summary.md) |

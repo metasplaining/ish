@@ -188,12 +188,12 @@ let x: i32 = null
 ')
 assert_output_contains "non-nullable rejects null" "type" "$output"
 
-# No type checking without standard
+# Present annotations are always checked, even without a standard
 output=$(run_ish '
 let x: String = 42
 println(x)
-')
-assert_output "no checking without standard" "42" "$output"
+' 2>&1)
+assert_output_contains "present annotation checked without standard" "type mismatch" "$output"
 
 # Cautious built-in standard
 output=$(run_ish '

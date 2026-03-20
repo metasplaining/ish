@@ -19,7 +19,7 @@ Instructions for AI agents working in this repository.
 cd proto && cargo build --workspace    # Build everything
 cd proto && cargo test --workspace     # Run all tests (317 tests)
 cd proto && cargo run -p ish-shell     # Run end-to-end demos (6 verifications)
-cd proto && bash ish-tests/run_all.sh  # Run acceptance tests (248 tests)
+cd proto && bash ish-tests/run_all.sh  # Run acceptance tests (255 tests)
 ```
 
 ---

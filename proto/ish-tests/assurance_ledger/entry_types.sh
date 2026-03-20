@@ -15,14 +15,15 @@ echo "--- Entry Types ---"
 output=$(run_ish 'println(has_entry_type("Error"))')
 assert_output "built-in Error exists" "true" "$output"
 
-output=$(run_ish 'println(has_entry_type("CodedError"))')
-assert_output "built-in CodedError exists" "true" "$output"
-
-output=$(run_ish 'println(has_entry_type("SystemError"))')
-assert_output "built-in SystemError exists" "true" "$output"
-
 output=$(run_ish 'println(has_entry_type("Mutable"))')
 assert_output "built-in Mutable exists" "true" "$output"
+
+# Structural error types are NOT entry types (removed per structural error model)
+output=$(run_ish 'println(has_entry_type("CodedError"))')
+assert_output "CodedError is not an entry type" "false" "$output"
+
+output=$(run_ish 'println(has_entry_type("SystemError"))')
+assert_output "SystemError is not an entry type" "false" "$output"
 
 output=$(run_ish 'println(has_entry_type("Type"))')
 assert_output "built-in Type exists" "true" "$output"

@@ -31,6 +31,8 @@ fn register_ledger(env: &Environment) {
         "feature_state",
         "has_standard",
         "has_entry_type",
+        "ledger_state",
+        "has_entry",
     ] {
         let n = (*name).to_string();
         let n2 = n.clone();

@@ -15,44 +15,56 @@ This document specifies ish error handling semantics: the error hierarchy, throw
 
 ## Error Hierarchy
 
-Errors in ish are ordinary objects annotated with error entries managed by the assurance ledger. The hierarchy is defined by entry type inheritance:
+Errors in ish are ordinary objects annotated with error entries managed by the assurance ledger. The only predefined error-related entry type is `@Error`, which requires a `message: String` property. All other error classifications are ordinary ish types defined structurally.
 
-| Entry type | Parent | Required properties | Description |
-|-----------|--------|---------------------|-------------|
-| `Error` | — | `message: String` | Base error entry — marks a value as an error |
-| `CodedError` | `Error` | `code: String` | Error with a well-known error code |
-| `SystemError` | `CodedError` | — | Interpreter-generated error (not user-created) |
+### Entry Type
 
-Domain subtypes extend `CodedError` to classify errors by source:
+| Entry type | Required properties | Description |
+|-----------|---------------------|-------------|
+| `Error` | `message: String` | Marks a value as an error. Added by the throw audit. |
 
-| Domain subtype | Parent | Description |
-|---------------|--------|-------------|
-| `TypeError` | `CodedError` | Type mismatch or type system violation |
-| `ArgumentError` | `CodedError` | Incorrect argument count or type |
-| `FileError` | `CodedError` | File system operation failure |
-| `FileNotFoundError` | `FileError` | File does not exist |
-| `PermissionError` | `FileError` | Permission denied |
+### Structural Error Types
 
-Domain subtypes are entry types registered at startup. User code may define additional domain subtypes with `entry type` declarations.
+The remaining error hierarchy is defined using ish's structural type system. These are ordinary types, not entry types. They will move to the standard library when the module/package system is complete.
+
+```ish
+type CodedError = Error & { code: String }
+type TypeError = CodedError & { code: "E004" }
+type ArgumentError = CodedError & { code: "E003" }
+type FileNotFoundError = CodedError & { code: "E008" }
+type PermissionError = CodedError & { code: "EXXX" }
+type FileError = FileNotFoundError | PermissionError
+type SystemError = TypeError | ArgumentError | FileError
+```
+
+`SystemError` is a union defined *over* the domain types — a `FileNotFoundError` is a `SystemError` because the union includes it, not because it inherits from `SystemError`. The interpreter creates system errors as ordinary objects with `message`, `code`, and an `@Error` entry. The type system recognizes them structurally by their `code` value.
+
+User code may define additional error types using the same structural pattern.
 
 ### Error Object Structure
 
-An error object is any object that carries an `Error` entry. The minimum structure:
+An error object is any object that carries an `@Error` entry. The minimum structure:
 
 ```ish
-let err = @[Error] { message: "something went wrong" }
+let err = { message: "something went wrong" }
+throw err  // throw audit auto-adds @Error entry
 ```
 
-A coded error adds a `code` property:
+A coded error adds a `code` property. The type system structurally recognizes it as a `CodedError`:
 
 ```ish
-let err = @[Error] { message: "file not found", code: "E004" }
+throw { message: "file not found", code: "E008" }
+// Structurally: CodedError (has message + code)
+// Structurally: FileNotFoundError (code == "E008")
+// Structurally: FileError (FileNotFoundError is in the FileError union)
+// Structurally: SystemError (FileError is in the SystemError union)
 ```
 
-System errors are created by the interpreter and carry a `SystemError` entry. System errors are coded errors, and carry a well known error code.  Users may created and throw System errors, if they wish:
+Users may throw errors with well-known codes. The type system recognizes them structurally:
 
 ```ish
-throw { code: "E006", message: "I will be recognized by the type system as a TypeError" }
+throw { code: "E004", message: "expected int" }
+// Structurally recognized as TypeError, SystemError
 ```
 ---
 
@@ -68,12 +80,13 @@ throw { message: "invalid input" }
 
 When a `throw` statement executes, the ledger audits the thrown value:
 
-1. **Object with `message: String` and no `Error` entry** — the ledger auto-adds an `Error` entry. This allows natural error creation without explicit annotation.
-2. **Object with `message: String` and `code: String` and no `CodedError` entry** — the ledger auto-adds a `CodedError` entry (which implies `Error`).
-3. **Object without `message: String`** — discrepancy. The throw produces a `SystemError` wrapping the original value.
-4. **Non-object value** — discrepancy. The throw produces a `SystemError` wrapping the original value.
+1. **Object with `message: String`** — the ledger auto-adds an `@Error` entry if not already present. This allows natural error creation without explicit annotation.
+2. **Object without `message: String`** — discrepancy. The throw wraps the original value in a system error object: `{ message: "throw audit: thrown value does not qualify as an error", code: "E001", original: <value> }` with an `@Error` entry.
+3. **Non-object value** — discrepancy. The throw wraps the value as in rule 2.
 
-The throw audit ensures that all values in the error propagation path carry proper error entries.
+The throw audit only adds `@Error` entries. Whether an error has a `code` property (making it structurally a `CodedError`) is observed by the type system, not by the throw audit.
+
+The throw audit ensures that all values in the error propagation path carry `@Error` entries, guaranteeing that `e.message` is always accessible in catch blocks.
 
 ---
 
@@ -119,7 +132,7 @@ If the `finally` block throws, the new throw replaces the original.
 
 ## Defer
 
-The `defer` statement schedules cleanup code to run when the enclosing block exits:
+The `defer` statement schedules cleanup code to run when the enclosing function exits:
 
 ```ish
 fn process_file(path: String) {
@@ -131,7 +144,7 @@ fn process_file(path: String) {
 
 Deferred statements execute in LIFO (last-in, first-out) order. Errors from deferred statements are silently discarded to prevent masking the original error.
 
-`defer` is scoped to the enclosing block, not the function.
+`defer` is scoped to the enclosing function. Deferred statements accumulate in a per-function LIFO stack and execute when the function exits — not when the enclosing block exits. See the [defer-scoping proposal](../project/proposals/defer-scoping.md) for the rationale: resources acquired in dynamic control flow (loops, conditionals) are cleaned up in reverse acquisition order at function exit.
 
 ---
 
@@ -214,6 +227,7 @@ Well-known error codes are documented in [docs/errors/INDEX.md](../errors/INDEX.
 - [docs/spec/INDEX.md](INDEX.md)
 - [docs/spec/types.md](types.md)
 - [docs/spec/assurance-ledger.md](assurance-ledger.md)
+- [docs/architecture/vm.md](../architecture/vm.md)
 - [docs/errors/INDEX.md](../errors/INDEX.md)
 - [docs/user-guide/error-handling.md](../user-guide/error-handling.md)
 - [docs/ai-guide/patterns.md](../ai-guide/patterns.md)

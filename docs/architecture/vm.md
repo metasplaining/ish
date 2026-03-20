@@ -89,10 +89,12 @@ pub struct IshVm {
 
 ### Throw and Try/Catch
 
-The `Throw` statement evaluates its expression, performs a throw audit (auto-adds `Error`/`CodedError` entries if the value qualifies — see [docs/spec/errors.md](../spec/errors.md)), and returns `ControlFlow::Throw(value)`. This unwinds through blocks, loops, and other statements until it reaches either:
+The `Throw` statement evaluates its expression, performs a throw audit (auto-adds `@Error` entry if the value has `message: String` — see [docs/spec/errors.md](../spec/errors.md)), and returns `ControlFlow::Throw(value)`. This unwinds through blocks, loops, and other statements until it reaches either:
 
 - A `TryCatch` statement, which catches the throw, binds the value to the catch clause's parameter, and executes the catch body.
 - A function boundary, where `call_function` converts `ControlFlow::Throw(v)` into `Err(RuntimeError::thrown(v))`. The `TryCatch` handler also catches these `RuntimeError`s with `thrown_value`, so try/catch works across function calls.
+
+The throw audit only adds `@Error` entries. Other error classifications (`CodedError`, `TypeError`, `FileError`, etc.) are ordinary ish types recognized structurally by the type system, not by the throw audit.
 
 `Finally` blocks always execute. A throw from a finally block replaces any in-flight error.
 
@@ -102,7 +104,7 @@ The `Throw` statement evaluates its expression, performs a throw audit (auto-add
 
 ### Defer
 
-`Defer` statements within a `Block` are collected during execution and run in LIFO order when the block exits — whether normally, via return, or via throw.
+`Defer` statements within a function are collected during execution and run in LIFO order when the function exits — whether normally, via return, or via throw.
 
 ---
 
@@ -171,6 +173,8 @@ The ledger uses a clean separation between engine and VM integration:
 - **Engine** (`standard.rs`, `entry_type.rs`, `entry.rs`, `audit.rs`): Pure data structures and stateless logic. No dependency on the interpreter.
 - **VM integration** (`vm_integration.rs`): Owns the mutable state — scope stack, entry store, registries. Exposed as `IshVm.ledger`.
 
+The VM notifies the ledger of program events (variable declarations, assignments, branch points, function calls, throws). The ledger performs entry maintenance unconditionally and auditing per the active standard. The VM does not gate ledger operations based on feature states.
+
 ### Standard Scope Stack
 
 When a `@standard[name]` annotation is encountered, the interpreter pushes the named standard onto the ledger's scope stack. On scope exit, it pops. The topmost standard determines active feature states. Features are resolved with inheritance — if a standard extends another, unspecified features fall through to the parent.
@@ -190,6 +194,8 @@ When a `@standard[name]` annotation is encountered, the interpreter pushes the n
 - `RuntimeError::new(message)` — create a runtime error with a message
 - `RuntimeError::thrown(value)` — create a runtime error from a thrown value, preserving it for the caller's try/catch
 
+The error hierarchy uses a structural model: only `@Error` is a predefined entry type. `CodedError`, `SystemError`, `TypeError`, and other categories are ordinary ish types defined structurally. See [docs/spec/errors.md](../spec/errors.md).
+
 ---
 
 ## Tests
@@ -206,8 +212,10 @@ When a `@standard[name]` annotation is encountered, the interpreter pushes the n
 
 ## Referenced by
 
+- [AGENTS.md](../../AGENTS.md)
 - [docs/architecture/INDEX.md](INDEX.md)
 - [docs/architecture/overview.md](overview.md)
 - [docs/architecture/stdlib.md](stdlib.md)
 - [docs/spec/types.md](../spec/types.md)
+- [docs/spec/errors.md](../spec/errors.md)
 - [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md)

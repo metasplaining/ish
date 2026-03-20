@@ -117,28 +117,24 @@ try {
 ')
 assert_output "throw audit: coded error accepted" $'coded error\nCUSTOM01\ntrue' "$output"
 
-# Throw without message under standard → discrepancy (SystemError E004)
+# Throw without message → object wraps in system error (unconditional)
 output=$(run_ish '
-standard audit_std [
-    types(optional, runtime)
-]
 fn do_throw() {
     throw { name: "not an error" }
 }
 try {
-    @standard[audit_std]
     let x = do_throw()
 } catch (e) {
     println(error_code(e))
 }
 ')
-assert_output "throw audit: no message discrepancy" "E004" "$output"
+assert_output "throw audit: no message wraps" "E001" "$output"
 
-# Throw without standard → no audit, any value allowed
-output=$(run_ish 'try { throw "plain string" } catch (e) { println(e) }')
-assert_output "throw without audit: string allowed" "plain string" "$output"
+# Throw non-object → wraps in system error (unconditional)
+output=$(run_ish 'try { throw "plain string" } catch (e) { println(e.original) }')
+assert_output "throw non-object: string wrapped" "plain string" "$output"
 
-output=$(run_ish 'try { throw 42 } catch (e) { println(e) }')
-assert_output "throw without audit: integer allowed" "42" "$output"
+output=$(run_ish 'try { throw 42 } catch (e) { println(e.original) }')
+assert_output "throw non-object: integer wrapped" "42" "$output"
 
 finish

@@ -31,6 +31,7 @@ Structured proposals generated from prompt files using the `/propose` skill. Eac
 | 2026-03-18 | Proposal Process Improvements | accepted | [proposal-process-improvements.md](proposal-process-improvements.md) |
 | 2026-03-19 | Types, Errors, and Assurance Ledger — Consistency Audit | proposal | [types-errors-assurance-consistency.md](types-errors-assurance-consistency.md) |
 | 2026-03-19 | Rename /plan Skill to Avoid Copilot Builtin Conflict | accepted | [rename-plan-skill.md](rename-plan-skill.md) |
+| 2026-03-20 | Implementation Audit — Types, Errors, and Assurance Ledger | proposal | [implementation-audit-types-errors-ledger.md](implementation-audit-types-errors-ledger.md) |
 
 ---
 
