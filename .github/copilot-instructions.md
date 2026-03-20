@@ -12,16 +12,18 @@ When implementing changes, update project artifacts in this order:
 
 1. GLOSSARY.md (new terms)
 2. Roadmap (status → "in progress")
-3. Specification docs
-4. Architecture docs
-5. User guide / AI guide
-6. Agent documentation (AGENTS.md, skills)
-7. Acceptance tests
-8. Code
-9. Unit tests
-10. Roadmap (status → "completed")
-11. History
-12. Index files
+3. Maturity matrix (update affected rows)
+4. Specification docs
+5. Architecture docs
+6. User guide / AI guide
+7. Agent documentation (AGENTS.md, skills)
+8. Acceptance tests
+9. Code
+10. Unit tests
+11. Roadmap (status → "completed")
+12. Maturity matrix (update affected rows)
+13. History
+14. Index files
 
 Always update more authoritative artifacts before less authoritative ones.
 If you read an artifact during implementation and it seems to contradict the

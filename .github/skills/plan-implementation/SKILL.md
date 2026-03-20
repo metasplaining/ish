@@ -1,10 +1,10 @@
 ---
-name: plan
-description: 'Generate an implementation plan from a design proposal. Use when: a design proposal has been accepted and is ready for implementation. Creates a consolidated TODO with authority-ordered file changes. Trigger words: plan, implementation plan, ready to implement.'
+name: plan-implementation
+description: 'Generate an implementation plan from a design proposal. Use when: a design proposal has been accepted and is ready for implementation. Creates a consolidated TODO with authority-ordered file changes. Trigger words: plan-implementation, implementation plan, ready to implement.'
 argument-hint: 'Path to the design proposal'
 ---
 
-# Plan
+# Plan Implementation
 
 Generate an implementation plan from an accepted design proposal. The plan is the single source of truth during implementation.
 
@@ -12,7 +12,7 @@ Generate an implementation plan from an accepted design proposal. The plan is th
 
 - A design proposal has been accepted and needs an implementation plan
 - The user wants to move from design to implementation
-- The user invokes `/plan <proposal-path>`
+- The user invokes `/plan-implementation <proposal-path>`
 
 ## Procedure
 

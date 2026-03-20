@@ -50,6 +50,10 @@ pub struct IshFunction {
     #[unsafe_ignore_trace]
     pub params: Vec<String>,
     #[unsafe_ignore_trace]
+    pub param_types: Vec<Option<ish_ast::TypeAnnotation>>,
+    #[unsafe_ignore_trace]
+    pub return_type: Option<ish_ast::TypeAnnotation>,
+    #[unsafe_ignore_trace]
     pub body: Statement, // must be a Block
     pub closure_env: Environment,
 }
@@ -59,12 +63,16 @@ pub type FunctionRef = Gc<IshFunction>;
 pub fn new_function(
     name: Option<String>,
     params: Vec<String>,
+    param_types: Vec<Option<ish_ast::TypeAnnotation>>,
+    return_type: Option<ish_ast::TypeAnnotation>,
     body: Statement,
     closure_env: Environment,
 ) -> Value {
     Value::Function(Gc::new(IshFunction {
         name,
         params,
+        param_types,
+        return_type,
         body,
         closure_env,
     }))

@@ -82,6 +82,24 @@ For more detail, see [Functions](functions.md) and the [type system specificatio
 
 ---
 
+## Naming Conventions
+
+ish uses consistent naming conventions:
+
+| Kind | Convention | Examples |
+|------|-----------|----------|
+| Variables | `snake_case` | `user_name`, `total_count` |
+| Functions | `snake_case` | `get_user`, `is_type`, `validate` |
+| Types | `PascalCase` | `String`, `Person`, `HttpResponse` |
+| Constants | `SCREAMING_SNAKE_CASE` | `MAX_SIZE`, `DEFAULT_PORT` |
+| Modules | `snake_case` | `std::io`, `http_client` |
+| Entry types | `PascalCase` | `Error`, `CodedError`, `Mutable` |
+| Standards | `snake_case` | `streamlined`, `cautious`, `rigorous` |
+
+For full details, see the [naming conventions specification](../spec/syntax.md#naming-conventions).
+
+---
+
 ## Referenced by
 
 - [docs/user-guide/INDEX.md](INDEX.md)

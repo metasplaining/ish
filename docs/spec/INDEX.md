@@ -23,6 +23,7 @@ Authoritative specification of ish syntax and semantics. These documents use nor
 | [memory.md](memory.md) | Memory management — stack, heap, reference counted, garbage collected | draft |
 | [polymorphism.md](polymorphism.md) | Polymorphism strategies — none, enumerated, monomorphized, vtable, associative array | draft |
 | [syntax.md](syntax.md) | Formal syntax — comments, variables, control flow, functions, types, shell mode, parser | draft |
+| [errors.md](errors.md) | Errors — hierarchy, throw/catch/finally/defer, ledger integration, error catalog | draft |
 
 ---
 

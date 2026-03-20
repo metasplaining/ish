@@ -340,7 +340,7 @@ fn assign_target_to_value(target: &AssignTarget) -> Value {
 pub fn value_to_program(value: &Value) -> Result<Program, RuntimeError> {
     let kind = get_kind(value)?;
     if kind != "program" {
-        return Err(RuntimeError::new(format!("expected program, got kind '{}'", kind)));
+        return Err(RuntimeError::system_error(format!("expected program, got kind '{}'", kind), "E004"));
     }
     let stmts_val = get_field(value, "statements")?;
     let stmts = value_to_stmt_list(&stmts_val)?;
@@ -484,7 +484,7 @@ pub fn value_to_stmt(value: &Value) -> Result<Statement, RuntimeError> {
                 body: Box::new(body),
             })
         }
-        _ => Err(RuntimeError::new(format!("unknown statement kind: '{}'", kind))),
+        _ => Err(RuntimeError::system_error(format!("unknown statement kind: '{}'", kind), "E004")),
     }
 }
 
@@ -500,39 +500,39 @@ pub fn value_to_expr(value: &Value) -> Result<Expression, RuntimeError> {
                     if let Value::Bool(b) = val {
                         Ok(Expression::bool(b))
                     } else {
-                        Err(RuntimeError::new("literal bool has non-bool value"))
+                        Err(RuntimeError::system_error("literal bool has non-bool value", "E004"))
                     }
                 }
                 "int" => {
                     if let Value::Int(n) = val {
                         Ok(Expression::int(n))
                     } else {
-                        Err(RuntimeError::new("literal int has non-int value"))
+                        Err(RuntimeError::system_error("literal int has non-int value", "E004"))
                     }
                 }
                 "float" => {
                     if let Value::Float(f) = val {
                         Ok(Expression::float(f))
                     } else {
-                        Err(RuntimeError::new("literal float has non-float value"))
+                        Err(RuntimeError::system_error("literal float has non-float value", "E004"))
                     }
                 }
                 "string" => {
                     if let Value::String(ref s) = val {
                         Ok(Expression::string(s.as_ref().clone()))
                     } else {
-                        Err(RuntimeError::new("literal string has non-string value"))
+                        Err(RuntimeError::system_error("literal string has non-string value", "E004"))
                     }
                 }
                 "char" => {
                     if let Value::Char(c) = val {
                         Ok(Expression::char_lit(c))
                     } else {
-                        Err(RuntimeError::new("literal char has non-char value"))
+                        Err(RuntimeError::system_error("literal char has non-char value", "E004"))
                     }
                 }
                 "null" => Ok(Expression::null()),
-                _ => Err(RuntimeError::new(format!("unknown literal_type: '{}'", lit_type))),
+                _ => Err(RuntimeError::system_error(format!("unknown literal_type: '{}'", lit_type), "E004")),
             }
         }
         "identifier" => {
@@ -570,7 +570,7 @@ pub fn value_to_expr(value: &Value) -> Result<Expression, RuntimeError> {
                 }
                 Ok(Expression::ObjectLiteral(pairs))
             } else {
-                Err(RuntimeError::new("object_literal pairs must be a list"))
+                Err(RuntimeError::system_error("object_literal pairs must be a list", "E004"))
             }
         }
         "list_literal" => {
@@ -594,7 +594,7 @@ pub fn value_to_expr(value: &Value) -> Result<Expression, RuntimeError> {
             let body = value_to_stmt(&get_field(value, "body")?)?;
             Ok(Expression::lambda(params, body))
         }
-        _ => Err(RuntimeError::new(format!("unknown expression kind: '{}'", kind))),
+        _ => Err(RuntimeError::system_error(format!("unknown expression kind: '{}'", kind), "E004")),
     }
 }
 
@@ -621,7 +621,7 @@ fn value_to_assign_target(value: &Value) -> Result<AssignTarget, RuntimeError> {
                 index: Box::new(index),
             })
         }
-        _ => Err(RuntimeError::new(format!("unknown assign target kind: '{}'", kind))),
+        _ => Err(RuntimeError::system_error(format!("unknown assign target kind: '{}'", kind), "E004")),
     }
 }
 
@@ -635,7 +635,7 @@ fn value_to_params(value: &Value) -> Result<Vec<Parameter>, RuntimeError> {
         }
         Ok(params)
     } else {
-        Err(RuntimeError::new("params must be a list"))
+        Err(RuntimeError::system_error("params must be a list", "E004"))
     }
 }
 
@@ -644,7 +644,7 @@ fn value_to_stmt_list(value: &Value) -> Result<Vec<Statement>, RuntimeError> {
         let list = list_ref.borrow();
         list.iter().map(value_to_stmt).collect()
     } else {
-        Err(RuntimeError::new("expected a list of statements"))
+        Err(RuntimeError::system_error("expected a list of statements", "E004"))
     }
 }
 
@@ -653,7 +653,7 @@ fn value_to_expr_list(value: &Value) -> Result<Vec<Expression>, RuntimeError> {
         let list = list_ref.borrow();
         list.iter().map(value_to_expr).collect()
     } else {
-        Err(RuntimeError::new("expected a list of expressions"))
+        Err(RuntimeError::system_error("expected a list of expressions", "E004"))
     }
 }
 
@@ -672,11 +672,11 @@ fn get_field(value: &Value, field: &str) -> Result<Value, RuntimeError> {
         let map = obj_ref.borrow();
         Ok(map.get(field).cloned().unwrap_or(Value::Null))
     } else {
-        Err(RuntimeError::new(format!(
+        Err(RuntimeError::system_error(format!(
             "expected object when accessing field '{}', got {}",
             field,
             value.type_name()
-        )))
+        ), "E004"))
     }
 }
 
@@ -685,11 +685,11 @@ fn get_string_field(value: &Value, field: &str) -> Result<String, RuntimeError> 
     if let Value::String(ref s) = val {
         Ok(s.as_ref().clone())
     } else {
-        Err(RuntimeError::new(format!(
+        Err(RuntimeError::system_error(format!(
             "expected string for field '{}', got {}",
             field,
             val.type_name()
-        )))
+        ), "E004"))
     }
 }
 
@@ -726,7 +726,7 @@ fn parse_binop(s: &str) -> Result<BinaryOperator, RuntimeError> {
         "gteq" => Ok(BinaryOperator::GtEq),
         "and" => Ok(BinaryOperator::And),
         "or" => Ok(BinaryOperator::Or),
-        _ => Err(RuntimeError::new(format!("unknown binary operator: '{}'", s))),
+        _ => Err(RuntimeError::system_error(format!("unknown binary operator: '{}'", s), "E004")),
     }
 }
 
@@ -743,7 +743,7 @@ fn parse_unop(s: &str) -> Result<UnaryOperator, RuntimeError> {
         "not" => Ok(UnaryOperator::Not),
         "negate" => Ok(UnaryOperator::Negate),
         "try" => Ok(UnaryOperator::Try),
-        _ => Err(RuntimeError::new(format!("unknown unary operator: '{}'", s))),
+        _ => Err(RuntimeError::system_error(format!("unknown unary operator: '{}'", s), "E004")),
     }
 }
 
@@ -758,7 +758,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_program".into(),
         new_builtin("ast_program", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_program expects 1 argument (list of statements)"));
+                return Err(RuntimeError::system_error("ast_program expects 1 argument (list of statements)", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("program"));
@@ -772,7 +772,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_literal".into(),
         new_builtin("ast_literal", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_literal expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_literal expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("literal"));
@@ -796,7 +796,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_identifier".into(),
         new_builtin("ast_identifier", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_identifier expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_identifier expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("identifier"));
@@ -810,7 +810,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_binary_op".into(),
         new_builtin("ast_binary_op", |args| {
             if args.len() != 3 {
-                return Err(RuntimeError::new("ast_binary_op expects 3 arguments"));
+                return Err(RuntimeError::system_error("ast_binary_op expects 3 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("binary_op"));
@@ -826,7 +826,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_unary_op".into(),
         new_builtin("ast_unary_op", |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::new("ast_unary_op expects 2 arguments"));
+                return Err(RuntimeError::system_error("ast_unary_op expects 2 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("unary_op"));
@@ -841,7 +841,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_function_call".into(),
         new_builtin("ast_function_call", |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::new("ast_function_call expects 2 arguments"));
+                return Err(RuntimeError::system_error("ast_function_call expects 2 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("function_call"));
@@ -856,7 +856,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_block".into(),
         new_builtin("ast_block", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_block expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_block expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("block"));
@@ -870,7 +870,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_return".into(),
         new_builtin("ast_return", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_return expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_return expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("return"));
@@ -884,7 +884,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_var_decl".into(),
         new_builtin("ast_var_decl", |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::new("ast_var_decl expects 2 arguments"));
+                return Err(RuntimeError::system_error("ast_var_decl expects 2 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("var_decl"));
@@ -899,7 +899,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_if".into(),
         new_builtin("ast_if", |args| {
             if args.len() != 3 {
-                return Err(RuntimeError::new("ast_if expects 3 arguments"));
+                return Err(RuntimeError::system_error("ast_if expects 3 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("if"));
@@ -915,7 +915,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_while".into(),
         new_builtin("ast_while", |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::new("ast_while expects 2 arguments"));
+                return Err(RuntimeError::system_error("ast_while expects 2 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("while"));
@@ -930,7 +930,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_function_decl".into(),
         new_builtin("ast_function_decl", |args| {
             if args.len() != 3 {
-                return Err(RuntimeError::new("ast_function_decl expects 3 arguments"));
+                return Err(RuntimeError::system_error("ast_function_decl expects 3 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("function_decl"));
@@ -946,7 +946,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_expr_stmt".into(),
         new_builtin("ast_expr_stmt", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_expr_stmt expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_expr_stmt expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("expr_stmt"));
@@ -960,7 +960,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_lambda".into(),
         new_builtin("ast_lambda", |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::new("ast_lambda expects 2 arguments"));
+                return Err(RuntimeError::system_error("ast_lambda expects 2 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("lambda"));
@@ -975,7 +975,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_property_access".into(),
         new_builtin("ast_property_access", |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::new("ast_property_access expects 2 arguments"));
+                return Err(RuntimeError::system_error("ast_property_access expects 2 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("property_access"));
@@ -990,7 +990,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_index_access".into(),
         new_builtin("ast_index_access", |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::new("ast_index_access expects 2 arguments"));
+                return Err(RuntimeError::system_error("ast_index_access expects 2 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("index_access"));
@@ -1005,7 +1005,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_object_literal".into(),
         new_builtin("ast_object_literal", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_object_literal expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_object_literal expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("object_literal"));
@@ -1019,7 +1019,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_list_literal".into(),
         new_builtin("ast_list_literal", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_list_literal expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_list_literal expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("list_literal"));
@@ -1033,7 +1033,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_param".into(),
         new_builtin("ast_param", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_param expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_param expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("name".to_string(), args[0].clone());
@@ -1046,7 +1046,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_assignment".into(),
         new_builtin("ast_assignment", |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::new("ast_assignment expects 2 arguments"));
+                return Err(RuntimeError::system_error("ast_assignment expects 2 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("assignment"));
@@ -1061,7 +1061,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_assign_target_var".into(),
         new_builtin("ast_assign_target_var", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_assign_target_var expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_assign_target_var expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("variable"));
@@ -1075,7 +1075,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_for_each".into(),
         new_builtin("ast_for_each", |args| {
             if args.len() != 3 {
-                return Err(RuntimeError::new("ast_for_each expects 3 arguments"));
+                return Err(RuntimeError::system_error("ast_for_each expects 3 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("for_each"));
@@ -1091,7 +1091,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_throw".into(),
         new_builtin("ast_throw", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_throw expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_throw expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("throw"));
@@ -1105,7 +1105,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_try_catch".into(),
         new_builtin("ast_try_catch", |args| {
             if args.len() != 3 {
-                return Err(RuntimeError::new("ast_try_catch expects 3 arguments"));
+                return Err(RuntimeError::system_error("ast_try_catch expects 3 arguments", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("try_catch"));
@@ -1121,7 +1121,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
         "ast_defer".into(),
         new_builtin("ast_defer", |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::new("ast_defer expects 1 argument"));
+                return Err(RuntimeError::system_error("ast_defer expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("kind".to_string(), str_val("defer"));

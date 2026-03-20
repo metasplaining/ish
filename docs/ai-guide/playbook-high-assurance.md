@@ -33,7 +33,7 @@ Use this playbook when generating or modifying code intended to be **high-assura
 @standard[rigorous] {
     type Greeting = {
         message: String
-        timestamp: Int
+        timestamp: i32
     }
 
     fn greet(name: String) -> Greeting {
@@ -48,11 +48,32 @@ Use this playbook when generating or modifying code intended to be **high-assura
 }
 ```
 
+## Error Handling
+
+In high-assurance code, use coded errors with the `undeclared_errors` feature:
+
+```ish
+@standard[rigorous] {
+    fn read_file(path: String) -> String | { message: String, code: String } {
+        // throw audit ensures thrown objects get CodedError entries
+        throw { message: "file not found", code: "E003" }
+    }
+
+    try {
+        let content = read_file("/missing.txt")
+    } catch (e) {
+        println(error_message(e))
+        println(error_code(e))
+    }
+}
+```
+
 ## What NOT to Do
 
 - Don't omit types for brevity — high-assurance code pays the ceremony cost for safety.
 - Don't use untyped variables or `any` equivalents.
 - Don't skip applying a standard when high-assurance is intended.
+- Don't throw objects without `message: String` — the throw audit will raise a discrepancy.
 
 See also: [Low-assurance playbook](playbook-low-assurance.md) | [Mixed playbook](playbook-mixed.md)
 

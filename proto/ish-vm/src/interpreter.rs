@@ -8,6 +8,7 @@ use crate::environment::Environment;
 use crate::error::RuntimeError;
 use crate::value::*;
 use crate::builtins;
+use crate::ledger::LedgerState;
 
 /// Signal for control flow: normal completion, return, throw, or break.
 enum ControlFlow {
@@ -26,6 +27,9 @@ pub struct IshVm {
     /// `run`) pushes a frame; deferred statements execute in LIFO order
     /// when the frame is popped at function exit.
     defer_stack: Vec<Vec<(Statement, Environment)>>,
+    /// Assurance ledger runtime state: standard scope stack, entry store,
+    /// and built-in registries.
+    pub ledger: LedgerState,
 }
 
 impl IshVm {
@@ -36,6 +40,7 @@ impl IshVm {
         IshVm {
             global_env: env,
             defer_stack: Vec::new(),
+            ledger: LedgerState::new(),
         }
     }
 
@@ -75,9 +80,9 @@ impl IshVm {
                 }
                 Ok(ControlFlow::Throw(v)) => {
                     self.pop_and_run_defers();
-                    return Err(RuntimeError::new(format!(
+                    return Err(RuntimeError::system_error(format!(
                         "Unhandled throw: {}", v.to_display_string()
-                    )));
+                    ), "E001"));
                 }
                 Ok(ControlFlow::ExprValue(v)) => last = v,
                 Ok(ControlFlow::None) => {}
@@ -98,8 +103,9 @@ impl IshVm {
         env: &Environment,
     ) -> Result<ControlFlow, RuntimeError> {
         match stmt {
-            Statement::VariableDecl { name, value, .. } => {
+            Statement::VariableDecl { name, value, type_annotation, .. } => {
                 let val = self.eval_expression(value, env)?;
+                self.audit_type_annotation(name, &val, type_annotation.as_ref())?;
                 env.define(name.clone(), val);
                 Ok(ControlFlow::None)
             }
@@ -115,11 +121,11 @@ impl IshVm {
                         if let Value::Object(ref obj_ref) = obj {
                             obj_ref.borrow_mut().insert(property.clone(), val);
                         } else {
-                            return Err(RuntimeError::new(format!(
+                            return Err(RuntimeError::system_error(format!(
                                 "cannot set property '{}' on {}",
                                 property,
                                 obj.type_name()
-                            )));
+                            ), "E004"));
                         }
                     }
                     AssignTarget::Index { object, index } => {
@@ -130,28 +136,28 @@ impl IshVm {
                                 let mut list = list_ref.borrow_mut();
                                 let len = list.len() as i64;
                                 if i < 0 || i >= len {
-                                    return Err(RuntimeError::new(format!(
+                                    return Err(RuntimeError::system_error(format!(
                                         "index {} out of bounds (length {})",
                                         i, len
-                                    )));
+                                    ), "E007"));
                                 }
                                 list[i as usize] = val;
                             } else {
-                                return Err(RuntimeError::new("list index must be an integer"));
+                                return Err(RuntimeError::system_error("list index must be an integer", "E004"));
                             }
                         } else if let Value::Object(ref obj_ref) = obj {
                             if let Value::String(ref key) = idx {
                                 obj_ref.borrow_mut().insert(key.as_ref().clone(), val);
                             } else {
-                                return Err(RuntimeError::new(
-                                    "object index must be a string",
+                                return Err(RuntimeError::system_error(
+                                    "object index must be a string", "E004"
                                 ));
                             }
                         } else {
-                            return Err(RuntimeError::new(format!(
+                            return Err(RuntimeError::system_error(format!(
                                 "cannot index into {}",
                                 obj.type_name()
-                            )));
+                            ), "E004"));
                         }
                     }
                 }
@@ -182,12 +188,68 @@ impl IshVm {
                 else_block,
             } => {
                 let cond = self.eval_expression(condition, env)?;
-                if cond.is_truthy() {
-                    self.exec_statement(then_block, env)
-                } else if let Some(eb) = else_block {
-                    self.exec_statement(eb, env)
+
+                // Type narrowing: when types feature is active, analyze
+                // the condition and apply narrowing facts to each branch.
+                let features = self.ledger.active_features();
+                let types_active = features.contains_key("types");
+
+                if types_active {
+                    use crate::ledger::narrowing::{analyze_condition, invert_for_else, NarrowingFact};
+
+                    let facts = analyze_condition(condition);
+                    let snapshot = self.ledger.save_entries();
+
+                    if cond.is_truthy() {
+                        // Apply facts to true branch.
+                        for fact in &facts {
+                            match fact {
+                                NarrowingFact::IsType { variable, type_name } => {
+                                    self.ledger.narrow_type(variable, type_name);
+                                }
+                                NarrowingFact::NotNull { variable } => {
+                                    self.ledger.narrow_exclude_null(variable);
+                                }
+                                NarrowingFact::IsNull { .. } => {
+                                    // IsNull in true branch: no narrowing benefit.
+                                }
+                            }
+                        }
+                        let result = self.exec_statement(then_block, env);
+                        let then_entries = self.ledger.save_entries();
+                        self.ledger.restore_entries(snapshot);
+                        self.ledger.merge_entries(then_entries, self.ledger.save_entries());
+                        result
+                    } else if let Some(eb) = else_block {
+                        let else_facts = invert_for_else(&facts);
+                        for fact in &else_facts {
+                            match fact {
+                                NarrowingFact::IsType { variable, type_name } => {
+                                    self.ledger.narrow_type(variable, type_name);
+                                }
+                                NarrowingFact::NotNull { variable } => {
+                                    self.ledger.narrow_exclude_null(variable);
+                                }
+                                NarrowingFact::IsNull { .. } => {}
+                            }
+                        }
+                        let result = self.exec_statement(eb, env);
+                        let else_entries = self.ledger.save_entries();
+                        self.ledger.restore_entries(snapshot);
+                        self.ledger.merge_entries(self.ledger.save_entries(), else_entries);
+                        result
+                    } else {
+                        Ok(ControlFlow::None)
+                    }
                 } else {
-                    Ok(ControlFlow::None)
+                    // No type narrowing — simple if/else.
+                    if cond.is_truthy() {
+                        self.exec_statement(then_block, env)
+                    } else if let Some(eb) = else_block {
+                        self.exec_statement(eb, env)
+                    } else {
+                        Ok(ControlFlow::None)
+                    }
                 }
             }
 
@@ -224,10 +286,10 @@ impl IshVm {
                         }
                     }
                 } else {
-                    return Err(RuntimeError::new(format!(
+                    return Err(RuntimeError::system_error(format!(
                         "cannot iterate over {}",
                         iter_val.type_name()
-                    )));
+                    ), "E004"));
                 }
                 Ok(ControlFlow::None)
             }
@@ -247,12 +309,16 @@ impl IshVm {
             }
 
             Statement::FunctionDecl {
-                name, params, body, ..
+                name, params, body, return_type, ..
             } => {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
+                    params.iter().map(|p| p.type_annotation.clone()).collect();
                 let func = new_function(
                     Some(name.clone()),
                     param_names,
+                    param_types,
+                    return_type.clone(),
                     *body.clone(),
                     env.clone(),
                 );
@@ -262,6 +328,20 @@ impl IshVm {
 
             Statement::Throw { value } => {
                 let val = self.eval_expression(value, env)?;
+                // Throw audit: when the types feature is active, verify the
+                // thrown value qualifies as an error object.
+                if self.ledger.active_features().contains_key("types") {
+                    if let Value::Object(ref obj_ref) = val {
+                        let map = obj_ref.borrow();
+                        let has_message = matches!(map.get("message"), Some(Value::String(_)));
+                        if !has_message {
+                            return Err(RuntimeError::system_error(
+                                "throw audit: thrown object must have a 'message: String' property",
+                                "E004",
+                            ));
+                        }
+                    }
+                }
                 Ok(ControlFlow::Throw(val))
             }
 
@@ -381,13 +461,43 @@ impl IshVm {
                 self.exec_shell_command(command, args, pipes, redirections, env)
             }
 
-            Statement::Annotated { inner, .. } => {
-                // Execute the inner statement; annotations are metadata
-                self.exec_statement(inner, env)
+            Statement::Annotated { annotations, inner } => {
+                // Process standard annotations: push standards for the scope.
+                let mut pushed_standards = Vec::new();
+                for ann in annotations {
+                    if let Annotation::Standard(name) = ann {
+                        self.ledger.push_standard(name.clone());
+                        pushed_standards.push(name.clone());
+                    }
+                }
+                let result = self.exec_statement(inner, env);
+                // Pop standards in reverse order.
+                for _ in pushed_standards.iter().rev() {
+                    self.ledger.pop_standard();
+                }
+                result
             }
 
-            Statement::StandardDef { .. } | Statement::EntryTypeDef { .. } => {
-                // Standard and entry type definitions are declarative metadata
+            Statement::StandardDef { name, extends, features } => {
+                // Register the standard in the ledger.
+                use crate::ledger::standard::Standard;
+
+                let mut std = Standard::new(name.clone());
+                if let Some(parent) = extends {
+                    std = std.with_parent(parent.clone());
+                }
+                for feat in features {
+                    let state = parse_feature_params(&feat.params);
+                    std = std.with_feature(feat.name.clone(), state);
+                }
+                self.ledger.standard_registry.register(std);
+                Ok(ControlFlow::None)
+            }
+
+            Statement::EntryTypeDef { name, .. } => {
+                // Register as a simple entry type (no required properties for now).
+                use crate::ledger::entry_type::EntryType;
+                self.ledger.entry_type_registry.register(EntryType::new(name.clone()));
                 Ok(ControlFlow::None)
             }
 
@@ -397,7 +507,7 @@ impl IshVm {
             }
 
             Statement::Incomplete { kind } => {
-                Err(RuntimeError::new(format!("incomplete input: {:?}", kind)))
+                Err(RuntimeError::system_error(format!("incomplete input: {:?}", kind), "E004"))
             }
         }
     }
@@ -461,16 +571,16 @@ impl IshVm {
                     UnaryOperator::Negate => match val {
                         Value::Int(n) => Ok(Value::Int(-n)),
                         Value::Float(f) => Ok(Value::Float(-f)),
-                        _ => Err(RuntimeError::new(format!(
+                        _ => Err(RuntimeError::system_error(format!(
                             "cannot negate {}",
                             val.type_name()
-                        ))),
+                        ), "E004")),
                     },
                     UnaryOperator::Try => {
                         // ? operator: if value is an error, propagate it; otherwise unwrap
                         // For now, null signals error
                         if val == Value::Null {
-                            return Err(RuntimeError::new("tried to unwrap null value with ?".to_string()));
+                            return Err(RuntimeError::system_error("tried to unwrap null value with ?".to_string(), "E009"));
                         }
                         Ok(val)
                     }
@@ -510,11 +620,11 @@ impl IshVm {
                         let map = obj_ref.borrow();
                         Ok(map.get(property).cloned().unwrap_or(Value::Null))
                     }
-                    _ => Err(RuntimeError::new(format!(
+                    _ => Err(RuntimeError::system_error(format!(
                         "cannot access property '{}' on {}",
                         property,
                         obj.type_name()
-                    ))),
+                    ), "E004")),
                 }
             }
 
@@ -526,11 +636,11 @@ impl IshVm {
                         let list = list_ref.borrow();
                         let i = *i;
                         if i < 0 || i >= list.len() as i64 {
-                            return Err(RuntimeError::new(format!(
+                            return Err(RuntimeError::system_error(format!(
                                 "index {} out of bounds (length {})",
                                 i,
                                 list.len()
-                            )));
+                            ), "E007"));
                         }
                         Ok(list[i as usize].clone())
                     }
@@ -538,17 +648,19 @@ impl IshVm {
                         let map = obj_ref.borrow();
                         Ok(map.get(key.as_ref()).cloned().unwrap_or(Value::Null))
                     }
-                    _ => Err(RuntimeError::new(format!(
+                    _ => Err(RuntimeError::system_error(format!(
                         "cannot index {} with {}",
                         obj.type_name(),
                         idx.type_name()
-                    ))),
+                    ), "E004")),
                 }
             }
 
             Expression::Lambda { params, body } => {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                Ok(new_function(None, param_names, *body.clone(), env.clone()))
+                let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
+                    params.iter().map(|p| p.type_annotation.clone()).collect();
+                Ok(new_function(None, param_names, param_types, None, *body.clone(), env.clone()))
             }
 
             Expression::StringInterpolation(parts) => {
@@ -600,7 +712,7 @@ impl IshVm {
             }
 
             Expression::Incomplete { kind } => {
-                Err(RuntimeError::new(format!("incomplete expression: {:?}", kind)))
+                Err(RuntimeError::system_error(format!("incomplete expression: {:?}", kind), "E004"))
             }
         }
     }
@@ -633,7 +745,7 @@ impl IshVm {
                     }
                     Err(e) => {
                         env.define("__ish_last_exit_code".to_string(), Value::Int(1));
-                        Err(RuntimeError::new(format!("cd: {}: {}", target, e)))
+                        Err(RuntimeError::system_error(format!("cd: {}: {}", target, e), "E010"))
                     }
                 }
             }
@@ -647,7 +759,7 @@ impl IshVm {
                     }
                     Err(e) => {
                         env.define("__ish_last_exit_code".to_string(), Value::Int(1));
-                        Err(RuntimeError::new(format!("pwd: {}", e)))
+                        Err(RuntimeError::system_error(format!("pwd: {}", e), "E010"))
                     }
                 }
             }
@@ -733,7 +845,7 @@ impl IshVm {
                 cmd.stderr(Stdio::piped());
 
                 let output = cmd.output().map_err(|e| {
-                    RuntimeError::new(format!("{}: {}", command, e))
+                    RuntimeError::system_error(format!("{}: {}", command, e), "E010")
                 })?;
 
                 let exit_code = output.status.code().unwrap_or(-1) as i64;
@@ -742,7 +854,7 @@ impl IshVm {
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             } else {
                 let status = cmd.status().map_err(|e| {
-                    RuntimeError::new(format!("{}: {}", command, e))
+                    RuntimeError::system_error(format!("{}: {}", command, e), "E010")
                 })?;
 
                 let exit_code = status.code().unwrap_or(-1) as i64;
@@ -754,7 +866,7 @@ impl IshVm {
             // Pipeline: chain commands via stdin/stdout
             cmd.stdout(Stdio::piped());
             let mut child = cmd.spawn().map_err(|e| {
-                RuntimeError::new(format!("{}: {}", command, e))
+                RuntimeError::system_error(format!("{}: {}", command, e), "E010")
             })?;
 
             let mut prev_stdout = child.stdout.take();
@@ -778,14 +890,14 @@ impl IshVm {
                 }
 
                 let mut next_child = next_cmd.spawn().map_err(|e| {
-                    RuntimeError::new(format!("{}: {}", pipe.command, e))
+                    RuntimeError::system_error(format!("{}: {}", pipe.command, e), "E010")
                 })?;
 
                 prev_stdout = next_child.stdout.take();
 
                 if is_last {
                     let output = next_child.wait_with_output().map_err(|e| {
-                        RuntimeError::new(format!("{}: {}", pipe.command, e))
+                        RuntimeError::system_error(format!("{}: {}", pipe.command, e), "E010")
                     })?;
                     let exit_code = output.status.code().unwrap_or(-1) as i64;
                     env.define("__ish_last_exit_code".to_string(), Value::Int(exit_code));
@@ -818,12 +930,17 @@ impl IshVm {
         match func {
             Value::Function(f) => {
                 if args.len() != f.params.len() {
-                    return Err(RuntimeError::new(format!(
+                    return Err(RuntimeError::system_error(format!(
                         "function '{}' expected {} arguments, got {}",
                         f.name.as_deref().unwrap_or("anonymous"),
                         f.params.len(),
                         args.len()
-                    )));
+                    ), "E003"));
+                }
+                // Audit parameter types against annotations (when types feature active).
+                for (i, (param_name, arg)) in f.params.iter().zip(args.iter()).enumerate() {
+                    let param_type = f.param_types.get(i).and_then(|t| t.as_ref());
+                    self.audit_type_annotation(param_name, arg, param_type)?;
                 }
                 // Create a new scope from the closure environment
                 let call_env = f.closure_env.child();
@@ -835,23 +952,147 @@ impl IshVm {
                 self.push_defer_frame();
                 let result = self.exec_statement(&f.body, &call_env);
                 self.pop_and_run_defers();
-                match result? {
-                    ControlFlow::Return(v) => Ok(v),
-                    ControlFlow::ExprValue(v) => Ok(v),
-                    ControlFlow::None => Ok(Value::Null),
+                let return_val = match result? {
+                    ControlFlow::Return(v) => v,
+                    ControlFlow::ExprValue(v) => v,
+                    ControlFlow::None => Value::Null,
                     // Per proposal: throw does not cross function boundaries.
                     // A thrown value that escapes a function body is re-thrown
                     // by the default return handler (streamlined mode).
                     ControlFlow::Throw(v) => {
-                        Err(RuntimeError::thrown(v))
+                        return Err(RuntimeError::thrown(v));
                     }
-                }
+                };
+                // Audit return type.
+                let fn_name = f.name.as_deref().unwrap_or("anonymous");
+                self.audit_type_annotation(
+                    &format!("return of '{fn_name}'"),
+                    &return_val,
+                    f.return_type.as_ref(),
+                )?;
+                Ok(return_val)
             }
-            Value::BuiltinFunction(b) => (b.func)(args),
-            _ => Err(RuntimeError::new(format!(
+            Value::BuiltinFunction(b) => match b.name.as_str() {
+                "active_standard" => self.builtin_active_standard(args),
+                "feature_state" => self.builtin_feature_state(args),
+                "has_standard" => self.builtin_has_standard(args),
+                "has_entry_type" => self.builtin_has_entry_type(args),
+                _ => (b.func)(args),
+            },
+            _ => Err(RuntimeError::system_error(format!(
                 "cannot call {}",
                 func.type_name()
-            ))),
+            ), "E006")),
+        }
+    }
+
+    // ── Type audit helper ─────────────────────────────────────────────────
+
+    /// Audit a value against a type annotation, respecting the active standard.
+    ///
+    /// - If no standard is active (streamlined), no checking is performed.
+    /// - If types feature is `required` and annotation is missing → error.
+    /// - If annotation is present and value doesn't match → error.
+    fn audit_type_annotation(
+        &self,
+        item_name: &str,
+        value: &Value,
+        annotation: Option<&ish_ast::TypeAnnotation>,
+    ) -> Result<(), RuntimeError> {
+        let features = self.ledger.active_features();
+        let types_feature = match features.get("types") {
+            Some(fs) => fs,
+            None => return Ok(()), // no types feature active → no checking
+        };
+
+        match annotation {
+            Some(type_ann) => {
+                // Annotation present — check compatibility.
+                if !crate::ledger::type_compat::is_compatible(value, type_ann) {
+                    return Err(RuntimeError::system_error(format!(
+                        "type mismatch for '{}': expected {:?}, got {}",
+                        item_name,
+                        type_ann,
+                        value.type_name()
+                    ), "E004"));
+                }
+            }
+            None => {
+                // No annotation — only an error if annotation is required.
+                if types_feature.annotation
+                    == crate::ledger::standard::AnnotationDimension::Required
+                {
+                    return Err(RuntimeError::system_error(format!(
+                        "missing type annotation for '{}' (required by active standard)",
+                        item_name
+                    ), "E004"));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    // ── Ledger query builtins (need &self for ledger access) ────────────────
+
+    /// active_standard() -> String | null
+    fn builtin_active_standard(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if !args.is_empty() {
+            return Err(RuntimeError::system_error("active_standard expects 0 arguments", "E010"));
+        }
+        match self.ledger.active_standard() {
+            Some(name) => Ok(Value::String(Rc::new(name.to_string()))),
+            None => Ok(Value::Null),
+        }
+    }
+
+    /// feature_state(feature_name) -> String description | null
+    fn builtin_feature_state(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if args.len() != 1 {
+            return Err(RuntimeError::system_error("feature_state expects 1 argument", "E010"));
+        }
+        if let Value::String(name) = &args[0] {
+            match self.ledger.feature_state(name) {
+                Some(state) => {
+                    let ann = match state.annotation {
+                        crate::ledger::standard::AnnotationDimension::Optional => "optional",
+                        crate::ledger::standard::AnnotationDimension::Required => "required",
+                    };
+                    let aud = match state.audit {
+                        crate::ledger::standard::AuditDimension::Runtime => "runtime",
+                        crate::ledger::standard::AuditDimension::Build => "build",
+                    };
+                    let desc = format!("{}/{}", ann, aud);
+                    Ok(Value::String(Rc::new(desc)))
+                }
+                None => Ok(Value::Null),
+            }
+        } else {
+            Err(RuntimeError::system_error("feature_state expects a string argument", "E004"))
+        }
+    }
+
+    /// has_standard(name) -> Bool
+    fn builtin_has_standard(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if args.len() != 1 {
+            return Err(RuntimeError::system_error("has_standard expects 1 argument", "E010"));
+        }
+        if let Value::String(name) = &args[0] {
+            Ok(Value::Bool(self.ledger.standard_registry.get(name).is_some()))
+        } else {
+            Err(RuntimeError::system_error("has_standard expects a string argument", "E004"))
+        }
+    }
+
+    /// has_entry_type(name) -> Bool
+    fn builtin_has_entry_type(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+        if args.len() != 1 {
+            return Err(RuntimeError::system_error("has_entry_type expects 1 argument", "E010"));
+        }
+        if let Value::String(name) = &args[0] {
+            Ok(Value::Bool(self.ledger.entry_type_registry.get(name).is_some()))
+        } else {
+            Err(RuntimeError::system_error("has_entry_type expects a string argument", "E004"))
         }
     }
 
@@ -870,9 +1111,9 @@ impl IshVm {
             BinaryOperator::Div => {
                 // Check for division by zero
                 match rhs {
-                    Value::Int(0) => return Err(RuntimeError::new("division by zero")),
+                    Value::Int(0) => return Err(RuntimeError::system_error("division by zero", "E002")),
                     Value::Float(f) if *f == 0.0 => {
-                        return Err(RuntimeError::new("division by zero"))
+                        return Err(RuntimeError::system_error("division by zero", "E002"))
                     }
                     _ => {}
                 }
@@ -880,7 +1121,7 @@ impl IshVm {
             }
             BinaryOperator::Mod => {
                 match rhs {
-                    Value::Int(0) => return Err(RuntimeError::new("modulo by zero")),
+                    Value::Int(0) => return Err(RuntimeError::system_error("modulo by zero", "E002")),
                     _ => {}
                 }
                 self.arith(lhs, rhs, |a, b| a % b, |a, b| a % b)
@@ -919,11 +1160,11 @@ impl IshVm {
             (Value::Char(a), Value::String(b)) => {
                 Ok(Value::String(Rc::new(format!("{}{}", a, b))))
             }
-            _ => Err(RuntimeError::new(format!(
+            _ => Err(RuntimeError::system_error(format!(
                 "cannot add {} and {}",
                 lhs.type_name(),
                 rhs.type_name()
-            ))),
+            ), "E004")),
         }
     }
 
@@ -939,11 +1180,11 @@ impl IshVm {
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(float_op(*a, *b))),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(float_op(*a as f64, *b))),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(float_op(*a, *b as f64))),
-            _ => Err(RuntimeError::new(format!(
+            _ => Err(RuntimeError::system_error(format!(
                 "cannot perform arithmetic on {} and {}",
                 lhs.type_name(),
                 rhs.type_name()
-            ))),
+            ), "E004")),
         }
     }
 
@@ -967,11 +1208,11 @@ impl IshVm {
             (Value::String(a), Value::String(b)) => a.cmp(b),
             (Value::Char(a), Value::Char(b)) => a.cmp(b),
             _ => {
-                return Err(RuntimeError::new(format!(
+                return Err(RuntimeError::system_error(format!(
                     "cannot compare {} and {}",
                     lhs.type_name(),
                     rhs.type_name()
-                )))
+                ), "E004"))
             }
         };
         Ok(Value::Bool(pred(ordering)))
@@ -984,6 +1225,36 @@ impl Default for IshVm {
     }
 }
 
+// ── Ledger helpers ──────────────────────────────────────────────────────────
+
+/// Parse feature params from AST FeatureSpec params into a FeatureState.
+///
+/// Params can contain: "optional", "required", "runtime", "build", or a
+/// feature-specific parameter like "wrapping", "panicking", etc.
+fn parse_feature_params(params: &[String]) -> crate::ledger::standard::FeatureState {
+    use crate::ledger::standard::{FeatureState, AnnotationDimension, AuditDimension};
+
+    let mut annotation = AnnotationDimension::Required;
+    let mut audit = AuditDimension::Runtime;
+    let mut extra_param = None;
+
+    for p in params {
+        match p.as_str() {
+            "optional" => annotation = AnnotationDimension::Optional,
+            "required" => annotation = AnnotationDimension::Required,
+            "runtime" => audit = AuditDimension::Runtime,
+            "build" => audit = AuditDimension::Build,
+            other => extra_param = Some(other.to_string()),
+        }
+    }
+
+    let mut state = FeatureState::new(annotation, audit);
+    if let Some(param) = extra_param {
+        state = state.with_parameter(param);
+    }
+    state
+}
+
 // ── Shell helpers ───────────────────────────────────────────────────────────
 
 fn apply_redirections(cmd: &mut Command, redirections: &[Redirection]) -> Result<(), RuntimeError> {
@@ -992,19 +1263,19 @@ fn apply_redirections(cmd: &mut Command, redirections: &[Redirection]) -> Result
         match redir.kind {
             RedirectKind::StdoutWrite => {
                 let f = File::create(&redir.target).map_err(|e| {
-                    RuntimeError::new(format!("redirect: {}: {}", redir.target, e))
+                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), "E008")
                 })?;
                 cmd.stdout(f);
             }
             RedirectKind::StdoutAppend => {
                 let f = OpenOptions::new().create(true).append(true).open(&redir.target).map_err(|e| {
-                    RuntimeError::new(format!("redirect: {}: {}", redir.target, e))
+                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), "E008")
                 })?;
                 cmd.stdout(f);
             }
             RedirectKind::StderrWrite => {
                 let f = File::create(&redir.target).map_err(|e| {
-                    RuntimeError::new(format!("redirect: {}: {}", redir.target, e))
+                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), "E008")
                 })?;
                 cmd.stderr(f);
             }
@@ -1014,10 +1285,10 @@ fn apply_redirections(cmd: &mut Command, redirections: &[Redirection]) -> Result
             }
             RedirectKind::AllWrite => {
                 let f = File::create(&redir.target).map_err(|e| {
-                    RuntimeError::new(format!("redirect: {}: {}", redir.target, e))
+                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), "E008")
                 })?;
                 let f2 = f.try_clone().map_err(|e| {
-                    RuntimeError::new(format!("redirect: {}", e))
+                    RuntimeError::system_error(format!("redirect: {}", e), "E008")
                 })?;
                 cmd.stdout(f);
                 cmd.stderr(f2);
@@ -1945,15 +2216,14 @@ mod tests {
     }
 
     #[test]
-    fn test_new_error_builtin() {
-        // is_error(new_error("test"))  -> true
+    fn test_is_error_builtin() {
+        // is_error({ message: "test" })  -> true
         let program = ProgramBuilder::new()
             .expr_stmt(Expression::call(
                 Expression::ident("is_error"),
-                vec![Expression::call(
-                    Expression::ident("new_error"),
-                    vec![Expression::string("test message")],
-                )],
+                vec![Expression::object(vec![
+                    ("message", Expression::string("test message")),
+                ])],
             ))
             .build();
 
@@ -1965,17 +2235,16 @@ mod tests {
     #[test]
     fn test_throw_error_caught_with_message() {
         // fn test() {
-        //   try { throw new_error("boom"); }
+        //   try { throw { message: "boom" }; }
         //   catch (e) { return error_message(e); }
         // }
         // test()  -> "boom"
         let program = ProgramBuilder::new()
             .function("test", &[], |b| {
                 b.try_catch(
-                    |b| b.throw(Expression::call(
-                        Expression::ident("new_error"),
-                        vec![Expression::string("boom")],
-                    )),
+                    |b| b.throw(Expression::object(vec![
+                        ("message", Expression::string("boom")),
+                    ])),
                     vec![CatchClause::new("e", Statement::block(vec![
                         Statement::ret(Some(Expression::call(
                             Expression::ident("error_message"),
@@ -2113,5 +2382,492 @@ mod tests {
     fn test_char_type_name() {
         let val = Value::Char('A');
         assert_eq!(val.type_name(), "char");
+    }
+
+    // ── Type audit tests ──────────────────────────────────────
+
+    fn run_source_err(source: &str) -> String {
+        let program = parse(source).unwrap_or_else(|errs| {
+            panic!("parse failed: {:?}", errs)
+        });
+        let mut vm = IshVm::new();
+        match vm.run(&program) {
+            Err(e) => format!("{}", e),
+            Ok(v) => panic!("expected error, got: {:?}", v),
+        }
+    }
+
+    #[test]
+    fn type_audit_correct_annotation_passes() {
+        let result = run_source(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+@standard[typed_std]
+let x: i32 = 42
+x
+"#);
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn type_audit_wrong_annotation_fails() {
+        let err = run_source_err(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+@standard[typed_std]
+let x: String = 42
+"#);
+        assert!(err.contains("type"), "expected type error, got: {}", err);
+    }
+
+    #[test]
+    fn type_audit_required_missing_annotation_fails() {
+        let err = run_source_err(r#"
+standard strict_std [
+    types(required, runtime)
+]
+@standard[strict_std]
+let x = 42
+"#);
+        assert!(err.contains("annotation") || err.contains("type"),
+                "expected missing annotation error, got: {}", err);
+    }
+
+    #[test]
+    fn type_audit_function_param_type_check() {
+        let err = run_source_err(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+fn greet(name: String) {
+    name
+}
+@standard[typed_std]
+let r = greet(42)
+"#);
+        assert!(err.contains("type"), "expected type error, got: {}", err);
+    }
+
+    #[test]
+    fn type_audit_function_param_correct() {
+        let result = run_source(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+fn double(n: i32) {
+    return n + n
+}
+@standard[typed_std]
+let r: i32 = double(21)
+r
+"#);
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn type_audit_return_type_check() {
+        let err = run_source_err(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+@standard[typed_std]
+fn get_name() -> String {
+    return 42
+}
+@standard[typed_std]
+let r = get_name()
+"#);
+        assert!(err.contains("type"), "expected return type error, got: {}", err);
+    }
+
+    #[test]
+    fn type_audit_return_type_correct() {
+        let result = run_source(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+@standard[typed_std]
+fn get_num() -> i32 {
+    return 42
+}
+@standard[typed_std]
+let r: i32 = get_num()
+r
+"#);
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn type_audit_nullable_annotation_accepts_null() {
+        let result = run_source(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+@standard[typed_std]
+let x: i32 | null = null
+x
+"#);
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn type_audit_union_annotation() {
+        let result = run_source(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+@standard[typed_std]
+let x: i32 | String = "hello"
+x
+"#);
+        assert_eq!(result, Value::String(Rc::new("hello".into())));
+    }
+
+    // ── Narrowing tests ───────────────────────────────────────
+
+    #[test]
+    fn narrowing_null_check_does_not_crash() {
+        // Smoke test: narrowing wiring runs without panicking under types feature.
+        let result = run_source(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+let x = 42
+@standard[typed_std]
+let r: i32 = x
+r
+"#);
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn narrowing_if_true_branch() {
+        // When condition is true, true branch executes.
+        let result = run_source(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+let x = 10
+if x != null {
+    println("not null")
+}
+x
+"#);
+        assert_eq!(result, Value::Int(10));
+    }
+
+    #[test]
+    fn narrowing_if_else_branch() {
+        // When condition is false, else branch executes.
+        let result = run_source(r#"
+standard typed_std [
+    types(optional, runtime)
+]
+let x = null
+if x != null {
+    println("not null")
+} else {
+    println("is null")
+}
+x
+"#);
+        assert_eq!(result, Value::Null);
+    }
+
+    // ── Error model tests (TODO 42) ────────────────────────────────────
+
+    #[test]
+    fn system_error_has_message_and_code() {
+        // RuntimeError::system_error creates an object with message and code
+        let err = RuntimeError::system_error("test message", "E001");
+        assert!(err.thrown_value.is_some());
+        let val = err.thrown_value.unwrap();
+        if let Value::Object(ref obj) = val {
+            let map = obj.borrow();
+            assert_eq!(map.get("message"), Some(&Value::String(Rc::new("test message".into()))));
+            assert_eq!(map.get("code"), Some(&Value::String(Rc::new("E001".into()))));
+        } else {
+            panic!("expected object, got {:?}", val);
+        }
+    }
+
+    #[test]
+    fn is_error_true_for_object_with_message() {
+        // is_error({ message: "x" }) -> true
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("is_error"),
+                vec![Expression::object(vec![
+                    ("message", Expression::string("x")),
+                ])],
+            ))
+            .build();
+        let mut vm = IshVm::new();
+        assert_eq!(vm.run(&program).unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn is_error_false_for_plain_object() {
+        // is_error({ name: "x" }) -> false (no message property)
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("is_error"),
+                vec![Expression::object(vec![
+                    ("name", Expression::string("x")),
+                ])],
+            ))
+            .build();
+        let mut vm = IshVm::new();
+        assert_eq!(vm.run(&program).unwrap(), Value::Bool(false));
+    }
+
+    #[test]
+    fn is_error_false_for_non_string_message() {
+        // is_error({ message: 42 }) -> false (message must be String)
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("is_error"),
+                vec![Expression::object(vec![
+                    ("message", Expression::int(42)),
+                ])],
+            ))
+            .build();
+        let mut vm = IshVm::new();
+        assert_eq!(vm.run(&program).unwrap(), Value::Bool(false));
+    }
+
+    #[test]
+    fn is_error_false_for_non_object() {
+        // is_error("hello") -> false
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("is_error"),
+                vec![Expression::string("hello")],
+            ))
+            .build();
+        let mut vm = IshVm::new();
+        assert_eq!(vm.run(&program).unwrap(), Value::Bool(false));
+    }
+
+    #[test]
+    fn error_message_extracts_message() {
+        // error_message({ message: "oops" }) -> "oops"
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("error_message"),
+                vec![Expression::object(vec![
+                    ("message", Expression::string("oops")),
+                ])],
+            ))
+            .build();
+        let mut vm = IshVm::new();
+        assert_eq!(vm.run(&program).unwrap(), Value::String(Rc::new("oops".into())));
+    }
+
+    #[test]
+    fn error_code_extracts_code() {
+        // error_code({ message: "x", code: "E002" }) -> "E002"
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("error_code"),
+                vec![Expression::object(vec![
+                    ("message", Expression::string("x")),
+                    ("code", Expression::string("E002")),
+                ])],
+            ))
+            .build();
+        let mut vm = IshVm::new();
+        assert_eq!(vm.run(&program).unwrap(), Value::String(Rc::new("E002".into())));
+    }
+
+    #[test]
+    fn error_code_returns_null_for_uncoded_error() {
+        // error_code({ message: "x" }) -> null
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("error_code"),
+                vec![Expression::object(vec![
+                    ("message", Expression::string("x")),
+                ])],
+            ))
+            .build();
+        let mut vm = IshVm::new();
+        assert_eq!(vm.run(&program).unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn error_code_returns_null_for_non_object() {
+        // error_code(42) -> null
+        let program = ProgramBuilder::new()
+            .expr_stmt(Expression::call(
+                Expression::ident("error_code"),
+                vec![Expression::int(42)],
+            ))
+            .build();
+        let mut vm = IshVm::new();
+        assert_eq!(vm.run(&program).unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn throw_audit_accepts_object_with_message_under_types() {
+        // Under a standard with types feature, throwing { message: "x" } should succeed.
+        let result = run_source(r#"
+standard audit_std [
+    types(optional, runtime)
+]
+fn test() {
+    try {
+        throw { message: "throw ok" }
+    } catch (e) {
+        return error_message(e)
+    }
+}
+test()
+"#);
+        assert_eq!(result, Value::String(Rc::new("throw ok".into())));
+    }
+
+    #[test]
+    fn throw_audit_rejects_object_without_message_under_types() {
+        // Under a standard with types feature, throwing { name: "bad" } should fail.
+        let program = ProgramBuilder::new()
+            .stmt(Statement::throw(Expression::object(vec![
+                ("name", Expression::string("bad")),
+            ])))
+            .build();
+        let mut vm = IshVm::new();
+        // Use optional annotations so throw audit runs without type annotation errors
+        vm.ledger.standard_registry.register(
+            super::super::ledger::standard::Standard::new("audit_types")
+                .with_feature("types", super::super::ledger::standard::FeatureState::new(
+                    super::super::ledger::standard::AnnotationDimension::Optional,
+                    super::super::ledger::standard::AuditDimension::Runtime,
+                ))
+        );
+        vm.ledger.push_standard("audit_types".to_string());
+        let result = vm.run(&program);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("throw audit"));
+    }
+
+    #[test]
+    fn throw_audit_skipped_without_types_feature() {
+        // Without a standard, throwing any value is allowed (no audit).
+        // throw "plain string" -> RuntimeError but no audit complaint
+        let program = ProgramBuilder::new()
+            .stmt(Statement::throw(Expression::string("plain")))
+            .build();
+        let mut vm = IshVm::new();
+        let result = vm.run(&program);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // The error is an unhandled throw, not an audit failure
+        assert!(err.message.contains("plain"));
+        assert!(!err.message.contains("throw audit"));
+    }
+
+    #[test]
+    fn caught_system_error_has_code() {
+        // System errors (e.g. division by zero) should have error codes.
+        // fn test() {
+        //   try { let x = 1 / 0; }
+        //   catch(e) { return error_code(e); }
+        // }
+        // test()
+        let program = ProgramBuilder::new()
+            .function("test", &[], |b| {
+                b.try_catch(
+                    |b| b.var_decl("x", Expression::binary(
+                        BinaryOperator::Div,
+                        Expression::int(1),
+                        Expression::int(0),
+                    )),
+                    vec![CatchClause::new("e", Statement::block(vec![
+                        Statement::ret(Some(Expression::call(
+                            Expression::ident("error_code"),
+                            vec![Expression::ident("e")],
+                        ))),
+                    ]))],
+                    None::<fn(BlockBuilder) -> BlockBuilder>,
+                )
+            })
+            .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
+            .build();
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::String(Rc::new("E002".into())));
+    }
+
+    #[test]
+    fn caught_system_error_is_error_true() {
+        // System errors should pass the is_error() check.
+        // fn test() {
+        //   try { let x = 1 / 0; }
+        //   catch(e) { return is_error(e); }
+        // }
+        // test()
+        let program = ProgramBuilder::new()
+            .function("test", &[], |b| {
+                b.try_catch(
+                    |b| b.var_decl("x", Expression::binary(
+                        BinaryOperator::Div,
+                        Expression::int(1),
+                        Expression::int(0),
+                    )),
+                    vec![CatchClause::new("e", Statement::block(vec![
+                        Statement::ret(Some(Expression::call(
+                            Expression::ident("is_error"),
+                            vec![Expression::ident("e")],
+                        ))),
+                    ]))],
+                    None::<fn(BlockBuilder) -> BlockBuilder>,
+                )
+            })
+            .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
+            .build();
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn caught_system_error_has_message() {
+        // System errors should have a message.
+        // fn test() {
+        //   try { let x = 1 / 0; }
+        //   catch(e) { return error_message(e); }
+        // }
+        // test()
+        let program = ProgramBuilder::new()
+            .function("test", &[], |b| {
+                b.try_catch(
+                    |b| b.var_decl("x", Expression::binary(
+                        BinaryOperator::Div,
+                        Expression::int(1),
+                        Expression::int(0),
+                    )),
+                    vec![CatchClause::new("e", Statement::block(vec![
+                        Statement::ret(Some(Expression::call(
+                            Expression::ident("error_message"),
+                            vec![Expression::ident("e")],
+                        ))),
+                    ]))],
+                    None::<fn(BlockBuilder) -> BlockBuilder>,
+                )
+            })
+            .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
+            .build();
+        let mut vm = IshVm::new();
+        let result = vm.run(&program).unwrap();
+        // Division by zero message
+        if let Value::String(ref s) = result {
+            assert!(s.contains("zero") || s.contains("division"),
+                "expected division-by-zero message, got: {}", s);
+        } else {
+            panic!("expected string, got {:?}", result);
+        }
     }
 }

@@ -3,7 +3,7 @@ title: Development History
 category: project
 audience: [all]
 status: draft
-last-verified: 2026-03-18
+last-verified: 2026-03-19
 depends-on: [docs/INDEX.md]
 ---
 
@@ -17,6 +17,8 @@ Entries are named `<isodate>-<topic>` for chronological sorting. Each entry is e
 
 | Date | Topic | Location |
 |------|-------|----------|
+| 2026-03-19 | Rename /plan skill to /plan-implementation | [2026-03-19-rename-plan-skill/](2026-03-19-rename-plan-skill/summary.md) |
+| 2026-03-19 | Types, errors, and assurance ledger consistency audit | [2026-03-19-types-errors-assurance-consistency/](2026-03-19-types-errors-assurance-consistency/summary.md) |
 | 2026-03-18 | Proposal process improvements design | [2026-03-18-proposal-process-improvements/](2026-03-18-proposal-process-improvements/summary.md) |
 | 2026-03-15 | String syntax design and implementation | [2026-03-15-string-syntax.md](2026-03-15-string-syntax.md) |
 | 2026-03-14 | Language syntax design | [2026-03-14-language-syntax.md](2026-03-14-language-syntax.md) |

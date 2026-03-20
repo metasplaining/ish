@@ -3,7 +3,7 @@ title: "Architecture: ish-vm"
 category: architecture
 audience: [all]
 status: draft
-last-verified: 2026-03-11
+last-verified: 2026-03-19
 depends-on: [docs/architecture/overview.md, docs/architecture/ast.md]
 ---
 
@@ -69,6 +69,8 @@ Closures capture an `Environment` at definition time. When a closure is called, 
 ```rust
 pub struct IshVm {
     pub global_env: Environment,
+    pub defer_stack: Vec<Vec<(Statement, Environment)>>,
+    pub ledger: LedgerState,
 }
 ```
 
@@ -87,7 +89,7 @@ pub struct IshVm {
 
 ### Throw and Try/Catch
 
-The `Throw` statement evaluates its expression and returns `ControlFlow::Throw(value)`. This unwinds through blocks, loops, and other statements until it reaches either:
+The `Throw` statement evaluates its expression, performs a throw audit (auto-adds `Error`/`CodedError` entries if the value qualifies — see [docs/spec/errors.md](../spec/errors.md)), and returns `ControlFlow::Throw(value)`. This unwinds through blocks, loops, and other statements until it reaches either:
 
 - A `TryCatch` statement, which catches the throw, binds the value to the catch clause's parameter, and executes the catch body.
 - A function boundary, where `call_function` converts `ControlFlow::Throw(v)` into `Err(RuntimeError::thrown(v))`. The `TryCatch` handler also catches these `RuntimeError`s with `thrown_value`, so try/catch works across function calls.
@@ -106,17 +108,20 @@ The `Throw` statement evaluates its expression and returns `ControlFlow::Throw(v
 
 ## Builtins (`builtins.rs`)
 
-45 Rust-native functions registered at VM startup. All take `&[Value]` and return `Result<Value, RuntimeError>`.
+49 Rust-native functions registered at VM startup. All take `&[Value]` and return `Result<Value, RuntimeError>`.
 
 | Group | Functions |
-|-------|-----------|
+|-------|-----------||
 | I/O | `print`, `println`, `read_file`, `write_file` |
 | Strings | `str_concat`, `str_length`, `str_slice`, `str_contains`, `str_starts_with`, `str_replace`, `str_split`, `str_to_upper`, `str_to_lower`, `str_char_at`, `str_trim` |
 | Lists | `list_push`, `list_pop`, `list_length`, `list_get`, `list_set`, `list_slice`, `list_join` |
 | Objects | `obj_get`, `obj_set`, `obj_has`, `obj_keys`, `obj_values`, `obj_remove` |
 | Types | `type_of`, `is_type` |
 | Conversion | `to_string`, `to_int`, `to_float`, `char` |
-| Errors | `new_error`, `is_error`, `error_message` |
+| Errors | `is_error`, `error_message`, `error_code` |
+| Ledger | `active_standard`, `feature_state`, `has_standard`, `has_entry_type` |
+
+Ledger builtins need VM access (they query `self.ledger`), so they are intercepted by name in `call_function` rather than using the standard closure dispatch. Stub closures are registered to make the names callable; reaching the stub body is an error.
 
 ---
 
@@ -147,6 +152,37 @@ Every node is an Object with a `"kind"` field:
 
 ---
 
+## Assurance Ledger Runtime (`ledger/`)
+
+The ledger runtime is a module within `ish-vm` that implements the assurance ledger engine. It is organized into five submodules:
+
+| Module | Purpose |
+|--------|---------|
+| `standard.rs` | `FeatureState`, `Standard`, `StandardRegistry` — feature state model with two dimensions (`AnnotationDimension`, `AuditDimension`), standard definitions and inheritance, built-in standards |
+| `entry_type.rs` | `EntryType`, `EntryTypeRegistry` — entry type definitions with inheritance and property requirements, built-in entry types |
+| `entry.rs` | `Entry`, `EntrySet` — entry instances attached to values |
+| `audit.rs` | Stateless `audit_statement()` function — checks a statement against active features and entries, returns `AuditResult` (Pass, AutoFix, Discrepancy) |
+| `vm_integration.rs` | `LedgerState` — wires the engine into the VM: standard scope stack, entry store, registries |
+
+### Architecture
+
+The ledger uses a clean separation between engine and VM integration:
+
+- **Engine** (`standard.rs`, `entry_type.rs`, `entry.rs`, `audit.rs`): Pure data structures and stateless logic. No dependency on the interpreter.
+- **VM integration** (`vm_integration.rs`): Owns the mutable state — scope stack, entry store, registries. Exposed as `IshVm.ledger`.
+
+### Standard Scope Stack
+
+When a `@standard[name]` annotation is encountered, the interpreter pushes the named standard onto the ledger's scope stack. On scope exit, it pops. The topmost standard determines active feature states. Features are resolved with inheritance — if a standard extends another, unspecified features fall through to the parent.
+
+### Statement Handlers
+
+- `Statement::StandardDef` — registers a standard in `self.ledger.standard_registry`
+- `Statement::EntryTypeDef` — registers an entry type in `self.ledger.entry_type_registry`
+- `Statement::Annotated` — pushes/pops standards for `@standard[name]` annotations around the inner statement
+
+---
+
 ## Error Handling (`error.rs`)
 
 `RuntimeError` type used throughout the VM. Contains a `message` field and an optional `thrown_value: Option<Value>` that preserves the original value when a throw crosses a function boundary.
@@ -161,6 +197,10 @@ Every node is an Object with a `"kind"` field:
 - `interpreter.rs`: 19 tests (execution) + 14 error handling tests + 8 char/string syntax tests
 - `builtins.rs`: 6 tests
 - `reflection.rs`: 4 tests
+- `ledger/standard.rs`: 6 tests
+- `ledger/entry_type.rs`: 7 tests
+- `ledger/audit.rs`: 5 tests
+- `ledger/vm_integration.rs`: 6 tests
 
 ---
 
@@ -170,3 +210,4 @@ Every node is an Object with a `"kind"` field:
 - [docs/architecture/overview.md](overview.md)
 - [docs/architecture/stdlib.md](stdlib.md)
 - [docs/spec/types.md](../spec/types.md)
+- [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md)

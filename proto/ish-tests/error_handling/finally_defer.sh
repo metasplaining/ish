@@ -17,7 +17,7 @@ output=$(run_ish 'try { println("body") } catch (e) { println("catch") } finally
 assert_output "finally without throw" $'body\nfinally' "$output"
 
 # Finally runs after catch
-output=$(run_ish 'try { throw new_error("x") } catch (e) { println("caught") } finally { println("finally") }')
+output=$(run_ish 'try { throw { message: "x" } } catch (e) { println("caught") } finally { println("finally") }')
 assert_output "finally with throw" $'caught\nfinally' "$output"
 
 # Defer in function — runs after return

@@ -52,7 +52,7 @@ impl Environment {
         if let Some(ref parent) = scope.parent {
             return parent.get(name);
         }
-        Err(RuntimeError::new(format!("undefined variable: {}", name)))
+        Err(RuntimeError::system_error(format!("undefined variable: {}", name), "E005"))
     }
 
     /// Set (re-assign) an existing variable by walking the scope chain.
@@ -65,7 +65,7 @@ impl Environment {
         if let Some(ref parent) = scope.parent {
             return parent.set(name, value);
         }
-        Err(RuntimeError::new(format!("undefined variable: {}", name)))
+        Err(RuntimeError::system_error(format!("undefined variable: {}", name), "E005"))
     }
 }
 

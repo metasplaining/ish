@@ -480,6 +480,25 @@ use mylib::utils
 
 ---
 
+## Naming Conventions
+
+ish uses consistent naming conventions across all code and declarations.
+
+| Kind | Convention | Examples |
+|------|-----------|----------|
+| Variables | `snake_case` | `user_name`, `total_count` |
+| Functions | `snake_case` | `get_user`, `is_type`, `validate` |
+| Types | `PascalCase` | `String`, `Person`, `HttpResponse` |
+| Constants | `SCREAMING_SNAKE_CASE` | `MAX_SIZE`, `DEFAULT_PORT` |
+| Modules | `snake_case` | `std::io`, `http_client` |
+| Entry types | `PascalCase` | `Error`, `CodedError`, `Mutable`, `Type` |
+| Standards | `snake_case` | `streamlined`, `cautious`, `rigorous` |
+| Keywords | `lowercase` | `let`, `fn`, `if`, `mut` |
+
+These conventions match the existing prototype and Rust conventions. Built-in functions use `snake_case` (e.g., `is_type`, `error_message`, `type_of`). Built-in entry types use `PascalCase` (e.g., `Error`, `CodedError`, `SystemError`, `Mutable`, `Type`, `Open`, `Closed`).
+
+---
+
 ## Parser
 
 The parser uses [pest](https://pest.rs/) (PEG parser generator) with an error-accepting grammar. For each construct, the grammar contains rules for both valid and invalid forms, allowing the parser to always succeed and produce a parse tree. Error reporting walks the tree and generates diagnostics for invalid nodes.
@@ -492,3 +511,4 @@ The grammar is structured in layers: lexer rules (keywords, operators, literals)
 
 - [docs/spec/INDEX.md](INDEX.md)
 - [docs/project/proposals/language-syntax.md](../project/proposals/language-syntax.md)
+- [docs/user-guide/language-basics.md](../user-guide/language-basics.md)

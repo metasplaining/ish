@@ -3,8 +3,8 @@ title: "AI Guide: Common Patterns"
 category: ai-guide
 audience: [ai-agent]
 status: placeholder
-last-verified: 2026-03-10
-depends-on: [docs/spec/types.md, docs/spec/modules.md]
+last-verified: 2026-03-19
+depends-on: [docs/spec/types.md, docs/spec/assurance-ledger.md, docs/spec/modules.md, docs/spec/errors.md]
 ---
 
 # Common Patterns
@@ -23,11 +23,11 @@ start_server(config)
 
 ## Builder Pattern (High-Assurance)
 
-```
+```ish
 type ServerConfig = {
     host: String
-    port: Int
-    debug: Bool
+    port: i32
+    debug: bool
 }
 
 let config: ServerConfig = {
@@ -40,41 +40,101 @@ start_server(config)
 
 ## Optional Values
 
-```
+```ish
 // Low-assurance
-let name = get_name() // might be nil
-if name { print(name) }
+let name = get_name()    // might be null
+if name != null { println(name) }
 
 // High-assurance
 let name: String? = get_name()
-match name {
-    Some(n) -> print(n)
-    None -> print('anonymous')
+if name != null {
+    // name narrowed to String here
+    println(name)
+} else {
+    println("anonymous")
 }
 ```
 
-## Union Types for Error Handling
+## Error Handling
 
+Errors in ish are ordinary objects with entry-based identity. Throw an object with a `message` property — the ledger automatically adds an `Error` entry. Add a `code` property to get a `CodedError` entry.
+
+```ish
+// Throw a simple error (auto-gets Error entry)
+throw { message: "something went wrong" }
+
+// Throw a coded error (auto-gets CodedError entry)
+throw { message: "file not found", code: "E003" }
+
+// Catch and inspect
+try {
+    risky_operation()
+} catch (e) {
+    if is_error(e) {
+        println(error_message(e))
+        let code = error_code(e)    // null if not CodedError
+        if code != null { println("Code: " + code) }
+    }
+}
 ```
-fn parse(input: String) -> Int | ParseError {
+
+## Union Types for Error Results
+
+```ish
+fn parse(input: String) -> i32 | ParseError {
     // ...
 }
 
-match parse('42') {
-    Int(n) -> use(n)
-    ParseError(e) -> report(e)
+let result = parse("42")
+if is_type(result, i32) {
+    use(result)
+} else {
+    report(result)
 }
 ```
 
 ## Structural Subtyping
 
-```
+```ish
 // Any object with a .name field works
 fn greet(thing: { name: String }) {
-    print("Hello, {thing.name}")
+    println("Hello, " + thing.name)
 }
 
-greet({ name: 'Alice', age: 30 })  // OK — extra fields ignored
+@[Open]
+let person = { name: "Alice", age: 30 }
+greet(person)    // OK — Open object, extra fields allowed
+```
+
+## Open and Closed Objects
+
+```ish
+// Object literals are closed by default
+let point = { x: 0, y: 0 }    // Closed — only x and y
+
+// Explicitly open for dynamic data
+@[Open]
+let config = load_config()     // Open — extra properties allowed
+
+// Type declarations are indeterminate
+type Settings = { theme: String, font_size: i32 }
+// Open or closed depends on context/annotation
+```
+
+## Type Narrowing
+
+```ish
+let value: i32 | String | null = get_value()
+
+if value == null {
+    println("nothing")
+} else if is_type(value, String) {
+    // value narrowed to String
+    println("string: " + value)
+} else {
+    // value narrowed to i32
+    println("number: " + to_string(value))
+}
 ```
 
 ## String Patterns

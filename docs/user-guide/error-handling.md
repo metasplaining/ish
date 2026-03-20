@@ -3,32 +3,43 @@ title: "User Guide: Error Handling"
 category: user-guide
 audience: [human-dev]
 status: draft
-last-verified: 2026-03-14
-depends-on: [docs/spec/types.md, docs/spec/assurance-ledger.md, docs/spec/syntax.md]
+last-verified: 2026-03-19
+depends-on: [docs/spec/errors.md, docs/spec/assurance-ledger.md, docs/spec/syntax.md]
 ---
 
 # Error Handling
 
-ish uses thrown exceptions for error handling. Errors are values — specifically, objects with error metadata — that are thrown with `throw` and caught with `try`/`catch`/`finally`.
+ish uses thrown exceptions for error handling. Errors are values — specifically, objects with `Error` entries managed by the assurance ledger — that are thrown with `throw` and caught with `try`/`catch`/`finally`.
 
 ---
 
-## The Error Type
+## Creating Errors
 
-Create errors with the `new_error` built-in:
-
-```ish
-let err = new_error("something went wrong")
-```
-
-Error objects are regular objects with a `message` property and an `__is_error__` metadata flag. You can inspect them with `is_error()` and `error_message()`:
+Errors are ordinary objects with a `message` property. When thrown, the ledger automatically adds an `Error` entry:
 
 ```ish
-is_error(err)        // true
-error_message(err)   // "something went wrong"
+throw { message: "something went wrong" }
 ```
 
-Only error objects should be thrown (this will be enforced by the type system when it matures).
+To create a coded error, add a `code` property — the ledger auto-adds a `CodedError` entry:
+
+```ish
+throw { message: "file not found", code: "E004" }
+```
+
+You can inspect errors with `is_error()`, `error_message()`, and `error_code()`:
+
+```ish
+try {
+    throw { message: "oops", code: "E001" }
+} catch (e) {
+    is_error(e)        // true
+    error_message(e)   // "oops"
+    error_code(e)      // "E001"
+}
+```
+
+Only objects with a `message: String` property can be thrown. Throwing a non-qualifying value produces a system error.
 
 ---
 
@@ -37,7 +48,7 @@ Only error objects should be thrown (this will be enforced by the type system wh
 The `throw` statement raises an error:
 
 ```ish
-throw new_error("file not found")
+throw { message: "file not found" }
 ```
 
 A throw unwinds execution until it reaches a `try`/`catch` block or a function boundary. When a throw escapes a function, it becomes a runtime error that the caller must handle.
@@ -182,13 +193,13 @@ For block-scoped resource cleanup, use a `with` block instead (see above). If yo
 
 ## Error Handling Across Assurance Levels
 
-How error handling is configured varies with the assurance level. The `checked_exceptions` feature is a configurable entry in the assurance ledger:
+How error handling is configured varies with the assurance level. The `undeclared_errors` feature controls whether functions must declare thrown errors:
 
-- **Low-assurance mode:** Functions can throw without declaring it. Unhandled throws become runtime errors.
-- **High-assurance mode:** Functions must declare the errors they can throw. The compiler verifies that all error paths are handled.
-- **No-throw mode:** Throwing is not permitted. All errors must be handled via result types.
+- **Streamlined:** Functions can throw without declaring it (`undeclared_errors(any)`). Unhandled throws become runtime errors.
+- **Cautious:** Functions should declare thrown errors, but undeclared throws are allowed.
+- **Rigorous:** Functions must not throw undeclared errors (`undeclared_errors(none)`). All error paths must be handled.
 
-See [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md) for configuration details.
+See [docs/spec/errors.md](../spec/errors.md) for the error hierarchy and [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md) for configuration details.
 
 ---
 

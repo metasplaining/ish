@@ -3,7 +3,7 @@ title: "Feature Maturity Matrix"
 category: project
 audience: [human-dev, ai-agent]
 status: draft
-last-verified: 2026-03-10
+last-verified: 2026-03-19
 depends-on: [docs/spec/INDEX.md]
 ---
 
@@ -22,16 +22,16 @@ Tracks which language features are designed, prototyped, and production-ready.
 | Closures | ✅ | partial | ✅ | partial | ❌ |
 | Module system | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Visibility (pub/priv) | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Assurance Ledger | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Assurance Ledger | ✅ | ✅ | ✅ | partial | ❌ |
 | Execution configurations | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Reasoning system | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Memory management | partial | partial | ❌ | ❌ | ❌ |
 | Polymorphism | partial | partial | ❌ | ❌ | ❌ |
-| Error handling | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Syntax / grammar | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Error handling | ✅ | ✅ | ✅ | partial | ❌ |
+| Syntax / grammar | ✅ | ✅ | ✅ | partial | ❌ |
 | Pattern matching | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Standard library | ❌ | ❌ | partial | ❌ | ❌ |
-| Parser | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Parser | ✅ | partial | ✅ | partial | ❌ |
 
 ## Legend
 

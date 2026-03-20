@@ -3,7 +3,7 @@ title: "AI Guide: Orientation"
 category: ai-guide
 audience: [ai-agent]
 status: placeholder
-last-verified: 2026-03-10
+last-verified: 2026-03-19
 depends-on: [GLOSSARY.md, docs/spec/INDEX.md, docs/architecture/INDEX.md, CONTRIBUTING.md]
 ---
 
@@ -24,8 +24,12 @@ ish is a general-purpose programming language organized around a **low-assurance
 | High-assurance | Maximum constraints; static-language-like | [assurance-ledger.md](../spec/assurance-ledger.md) |
 | Standard | A named configuration that governs what the ledger tracks within its scope | [assurance-ledger.md](../spec/assurance-ledger.md) |
 | Entry | A recorded fact about a specific item in the assurance ledger | [assurance-ledger.md](../spec/assurance-ledger.md) |
+| Value entry | Type information on values: actual-value, possible-values, allowed-values | [types.md](../spec/types.md), [assurance-ledger.md](../spec/assurance-ledger.md) |
+| Open/Closed | Object openness: closed (exact properties) or open (extra allowed) | [types.md](../spec/types.md) |
+| Feature state | Two dimensions: `type_annotations` (optional/required) and `type_audit` (runtime/build) | [assurance-ledger.md](../spec/assurance-ledger.md) |
 | Execution configuration | Runtime profiles (dev/test/prod) that enforce assurance levels | [execution.md](../spec/execution.md) |
-| Polymorphism | Currently structural typing; nominal typing is high-assurance | [polymorphism.md](../spec/polymorphism.md) |
+| Polymorphism | Structural typing by default; nominal typing via explicit entry | [polymorphism.md](../spec/polymorphism.md) |
+| Error model | Entry-based: Error/CodedError/SystemError hierarchy, throw audit, domain subtypes | [errors.md](../spec/errors.md) |
 
 See [GLOSSARY.md](../../GLOSSARY.md) for the full glossary.
 
@@ -36,16 +40,17 @@ ish is in the **design + prototype** phase. The language specification is incomp
 ### What Exists
 
 - **Specification documents** in `docs/spec/` — authoritative but incomplete
-- **Prototype** in `proto/` — ~5,600 lines of Rust across 6 crates
+- **Prototype** in `proto/` — Rust across 7 crates (parser, AST, VM, stdlib, codegen, runtime, shell)
 - **Architecture docs** in `docs/architecture/` — describes the prototype's design
+- **PEG parser** (`ish-parser`) — pest grammar, parser-matches-everything philosophy
+- **Standard library** (`ish-stdlib`) — self-hosted analyzer, Rust generator, stdlib programs
+- **Assurance ledger runtime** — standards, entry types, audit logic in `ish-vm/src/ledger/`
 
 ### What Does Not Exist Yet
 
-- A parser for ish syntax (the prototype uses Rust-based AST builders)
-- A formal grammar
-- Standard library beyond builtins
 - Package management
-- Error handling design
+- Build-time (pre-audit) type checking
+- Entry-based error model (specification complete; runtime implementation in progress)
 
 ## Documentation Loading Strategy
 
@@ -78,7 +83,7 @@ Non-trivial changes follow a three-document lifecycle:
 2. **Design Proposal** (`docs/project/proposals/`) — Iterative design with alternatives and decisions.
 3. **Implementation Plan** (`docs/project/plans/`) — Consolidated TODO list, the single source of truth during implementation.
 
-Six skills support this lifecycle: `/propose`, `/revise`, `/accept`, `/plan`, `/implement`, `/audit`. See the skill files in `.github/skills/` for procedures. Authority order (the sequence in which artifacts are updated during implementation) is documented in `CONTRIBUTING.md` and `.github/copilot-instructions.md`.
+Six skills support this lifecycle: `/propose`, `/revise`, `/accept`, `/plan-implementation`, `/implement`, `/audit`. See the skill files in `.github/skills/` for procedures. Authority order (the sequence in which artifacts are updated during implementation) is documented in `CONTRIBUTING.md` and `.github/copilot-instructions.md`.
 
 ## Common AI Tasks
 
@@ -88,6 +93,21 @@ See the playbooks for workflow-specific guidance:
 - [Mixed-mode code](playbook-mixed.md)
 - [Common patterns](patterns.md)
 - [Antipatterns to avoid](antipatterns.md)
+
+---
+
+## Naming Conventions
+
+ish uses these naming conventions consistently:
+
+| Kind | Convention | Examples |
+|------|-----------|----------|
+| Variables, functions, modules, standards | `snake_case` | `get_user`, `is_type`, `std::io`, `cautious` |
+| Types, entry types | `PascalCase` | `String`, `Person`, `Error`, `CodedError`, `Mutable` |
+| Constants | `SCREAMING_SNAKE_CASE` | `MAX_SIZE`, `DEFAULT_PORT` |
+| Keywords | `lowercase` | `let`, `fn`, `if`, `mut` |
+
+See the [naming conventions specification](../spec/syntax.md#naming-conventions) for full details.
 
 ---
 

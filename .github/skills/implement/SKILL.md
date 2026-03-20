@@ -27,6 +27,7 @@ Execute an implementation plan following authority order with checkpoint verific
    b. After each item, verify the change against the requirements.
    c. Mark the item as completed in the plan.
    d. At checkpoint items, pause and verify all preceding work against the implementation plan.
+   e. At checkpoint items, update the maturity matrix (`docs/project/maturity.md`) if the completed work affects feature maturity.
 
 5. **After all items are complete,** run acceptance tests.
 

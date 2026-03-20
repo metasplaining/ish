@@ -17,9 +17,9 @@ Instructions for AI agents working in this repository.
 
 ```bash
 cd proto && cargo build --workspace    # Build everything
-cd proto && cargo test --workspace     # Run all tests (45 tests)
+cd proto && cargo test --workspace     # Run all tests (317 tests)
 cd proto && cargo run -p ish-shell     # Run end-to-end demos (6 verifications)
-cd proto && bash ish-tests/run_all.sh  # Run acceptance tests (150 tests)
+cd proto && bash ish-tests/run_all.sh  # Run acceptance tests (248 tests)
 ```
 
 ---
@@ -72,7 +72,7 @@ Load only the files you need for the task at hand.
 |------|-----------------|| Creating a design proposal | [.github/skills/propose/SKILL.md](.github/skills/propose/SKILL.md) |
 | Revising a design proposal | [.github/skills/revise/SKILL.md](.github/skills/revise/SKILL.md) |
 | Accepting a design proposal | [.github/skills/accept/SKILL.md](.github/skills/accept/SKILL.md) |
-| Creating an implementation plan | [.github/skills/plan/SKILL.md](.github/skills/plan/SKILL.md) |
+| Creating an implementation plan | [.github/skills/plan-implementation/SKILL.md](.github/skills/plan-implementation/SKILL.md) |
 | Implementing a plan | [.github/skills/implement/SKILL.md](.github/skills/implement/SKILL.md) |
 | Running a feature audit | [.github/skills/audit/SKILL.md](.github/skills/audit/SKILL.md) || Adding a new builtin function | [docs/architecture/vm.md](docs/architecture/vm.md) § Builtins |
 | Adding a new AST node | [docs/architecture/ast.md](docs/architecture/ast.md) |
@@ -91,6 +91,7 @@ Load only the files you need for the task at hand.
 - Use terms as defined in [GLOSSARY.md](GLOSSARY.md) — do not introduce synonyms.
 - Every documentation file requires YAML frontmatter and a `## Referenced by` section.
 - After code changes, update affected docs and add a history entry.
+- When adding new error conditions, update `docs/errors/INDEX.md` with the new error code, domain subtype, and production site.
 - Track documentation debt in [docs/project/documentation-debt.md](docs/project/documentation-debt.md).
 - When creating documentation with minimal specification, set `status: placeholder`.
 - History entries are written for humans. Use narrative prose that tells the story of what happened, including the evolution of ideas through proposal/response/decision exchanges. Do not write terse summaries or bullet-point logs.

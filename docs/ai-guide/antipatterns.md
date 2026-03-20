@@ -3,8 +3,8 @@ title: "AI Guide: Antipatterns"
 category: ai-guide
 audience: [ai-agent]
 status: placeholder
-last-verified: 2026-03-10
-depends-on: [docs/spec/assurance-ledger.md, docs/spec/types.md]
+last-verified: 2026-03-19
+depends-on: [docs/spec/assurance-ledger.md, docs/spec/types.md, docs/spec/errors.md]
 ---
 
 # Antipatterns
@@ -15,11 +15,11 @@ Things AI agents should **not** do when generating ish code.
 
 **Wrong**: Adding type annotations to some variables but not others, without applying a standard.
 
-```
+```ish
 // BAD — inconsistent assurance, no standard applied
-let x: Int = 42
+let x: i32 = 42
 let y = "hello"
-let z: Bool = true
+let z: bool = true
 ```
 
 **Right**: Either fully low-assurance or fully high-assurance, with a standard applied to make the choice explicit.
@@ -53,6 +53,37 @@ let z: Bool = true
 **Wrong**: Assuming specific garbage collection, threading model, or memory layout.
 
 **Right**: Check [memory.md](../spec/memory.md) and [execution.md](../spec/execution.md) for what is specified.
+
+## 7. Using Constructor Functions for Errors
+
+**Wrong**: Calling a constructor like `new_error()` to create errors.
+
+```ish
+// BAD — new_error() does not exist
+let e = new_error("something failed")
+throw e
+```
+
+**Right**: Throw an object literal with a `message` property. The ledger auto-adds the `Error` entry.
+
+```ish
+throw { message: "something failed" }
+```
+
+## 8. Throwing Without a Message
+
+**Wrong**: Throwing an object without a `message: String` property.
+
+```ish
+// BAD — no message property, throw audit raises a discrepancy
+throw { code: "E001" }
+```
+
+**Right**: Always include `message: String`. Add `code: String` for coded errors.
+
+```ish
+throw { message: "division by zero", code: "E001" }
+```
 
 ---
 

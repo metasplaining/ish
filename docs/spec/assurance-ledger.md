@@ -3,8 +3,8 @@ title: Assurance Ledger
 category: spec
 audience: [all]
 status: draft
-last-verified: 2026-03-14
-depends-on: [docs/project/proposals/assurance-ledger-syntax.md]
+last-verified: 2026-03-19
+depends-on: [docs/project/proposals/assurance-ledger-syntax.md, docs/spec/types.md]
 ---
 
 # Assurance Ledger
@@ -13,8 +13,10 @@ The assurance ledger is ish's unified consistency-checking system. It manages th
 
 - **Standards** configure what the ledger checks within a scope.
 - **Entries** record facts about individual items (variables, properties, functions, types).
-- **Audits** check entries for consistency — either at build time (pre-audit) or at execution time (live audit).
+- **Audits** check entries for consistency — either at build time or at execution time.
 - **Discrepancies** are conflicts detected by the audit — two entries are incompatible, or a required entry is missing.
+
+The ledger is ish's central mechanism for managing code quality. Features traditionally considered part of the "type system" — type checking, null safety, mutability, overflow behavior — are all ledger features. The type system (see [docs/spec/types.md](types.md)) specifies *what values are valid*; the ledger specifies *what checks are performed, when, and how strictly*.
 
 ---
 
@@ -32,7 +34,7 @@ fn process(data: List<String>) -> Result {
     @standard[rigorous]
     {
         // This block is checked under the rigorous standard
-        let mut sum: f64 = 0.0;
+        let mut sum: f64 = 0.0
         // ...
     }
 }
@@ -40,7 +42,7 @@ fn process(data: List<String>) -> Result {
 
 ### Entries
 
-An **entry** is a fact recorded about an item in the ledger. For example, `@[type(i32)]` records that a variable has type `i32`; `@[mutable]` records that a variable is mutable.
+An **entry** is a fact recorded about an item in the ledger. Entries describe types, behaviors, and constraints on values, properties, functions, and types.
 
 Entries can be created by native syntax or by explicit annotation. These are equivalent:
 
@@ -51,18 +53,155 @@ let mut x: i32 = 7
 
 Native syntax is preferred for readability. The annotation form exists for programmatic generation and for features that lack native syntax.
 
+#### Value Entries
+
+Three special entry kinds track type information on values:
+
+- **Actual-value entry** (`actual_value`): The exact value at a given point in execution. Replaces the concept of literal types — instead of a value "having" a literal type, the ledger records what value it actually holds.
+- **Possible-values entry** (`possible_values`): The set of values a variable might hold at a given point. Updated by inference, narrowing, and control flow analysis.
+- **Allowed-values entry** (`allowed_values`): The set of values a variable is *permitted* to hold, as declared by a type annotation. Used for type compatibility checking.
+
+```ish
+let x: i32 = 5
+// Entries on x:
+//   actual_value(5)
+//   possible_values(i32)
+//   allowed_values(i32)    — from the : i32 annotation
+
+let y = 5
+// Entries on y:
+//   actual_value(5)
+//   possible_values: deferred (resolved on demand)
+//   no allowed_values entry (no annotation)
+```
+
 ### Audit
 
 The **audit** is the process by which the ledger checks entries for consistency. There are two audit modes:
 
-- **Pre-audit** — occurs at build time (declaration time). Features set to `pre` in the active standard are checked during pre-audit.
-- **Live audit** — occurs at execution time. Features set to `live` in the active standard are checked during live audit.
+- **Runtime audit** — occurs at execution time. Features with `type_audit` set to `runtime` in the active standard are checked during runtime audit.
+- **Build audit** — occurs at build time (declaration time). Features with `type_audit` set to `build` in the active standard are checked during build audit.
 
-Features set to `optional` are not required. If an entry for an optional feature is present, it is still checked; if absent, no discrepancy is raised.
+Feature annotations have a separate dimension controlling whether they are required:
+
+- `type_annotations` set to `optional` — the annotation is not required. If an entry for the feature is present, it is still checked; if absent, no discrepancy is raised.
+- `type_annotations` set to `required` — the annotation is required. A missing entry produces a discrepancy.
+
+Type checking (type compatibility on assignment, function call, and return) is integrated into the audit. The VM always checks type compatibility; the standard determines *when* (runtime vs. build) and *how strictly* (optional vs. required annotations).
 
 ### Discrepancies
 
 A **discrepancy** is a conflict detected by the audit. Two entries on the same item are incompatible, or a required entry is missing. Discrepancy reporting includes an audit trail tracing back through the chain of standards and statements that contributed to the conflict.
+
+---
+
+## Entry Types
+
+Entry types define the schema for entries — what an entry means, what items it can apply to, and what other entries it implies or conflicts with.
+
+### Built-In Entry Types
+
+The following entry types are pre-registered at startup:
+
+| Entry type | Parent | Required properties | Description |
+|-----------|--------|-------------------|-------------|
+| `Error` | — | `message: String` | Error entry — marks a value as an error |
+| `CodedError` | `Error` | `code: String` | Error with a well-known code |
+| `SystemError` | `CodedError` | — | Interpreter-generated error |
+| `TypeError` | `CodedError` | — | Type mismatch or type system violation |
+| `ArgumentError` | `CodedError` | — | Incorrect argument count or type |
+| `FileError` | `CodedError` | — | File system operation failure |
+| `FileNotFoundError` | `FileError` | — | File does not exist |
+| `PermissionError` | `FileError` | — | Permission denied |
+| `Mutable` | — | — | Marks a variable/property as mutable |
+| `Type` | — | — | Structural type entry |
+| `Open` | — | — | Object is open to extra properties |
+| `Closed` | — | — | Object has exactly declared properties |
+
+Entry types support inheritance via `extends`. The `CodedError` entry type extends `Error`, inheriting its `message: String` requirement and adding `code: String`. `SystemError` extends `CodedError`. Domain error subtypes (`TypeError`, `ArgumentError`, `FileError`, etc.) extend `CodedError` to classify errors by source. See [docs/spec/errors.md](errors.md) for the full error hierarchy and throw audit semantics.
+
+### Custom Entry Types
+
+Custom entry types are defined with `entry type` blocks:
+
+```ish
+entry type validated {
+    applies_to: [variable, property],
+}
+
+entry type sanitized {
+    applies_to: [variable, property],
+    requires: @[type(_)],
+}
+
+entry type thread_safe {
+    applies_to: [variable, property],
+    implies: [@[immutable]],
+    conflicts: [@[object_type(open)]],
+}
+```
+
+---
+
+## Type Checking as a Ledger Feature
+
+Type checking is not a separate system — it is a feature managed by the assurance ledger. The audit checks type compatibility on three kinds of statements:
+
+- **Assignment**: The value's type must be compatible with the variable's `allowed_values` entry (the declared type annotation).
+- **Function call**: Each argument's type must be compatible with the corresponding parameter's declared type.
+- **Return statement**: The returned value's type must be compatible with the function's declared return type.
+
+The active standard's `types` feature controls the strictness:
+
+| `type_annotations` | `type_audit` | Behavior |
+|-------|------|----------|
+| `optional` | `runtime` | Type annotations are optional. When present, checked at runtime. |
+| `required` | `runtime` | Type annotations are required (omitting one is a discrepancy). Checked at runtime. |
+| `required` | `build` | Type annotations are required and checked at build time. |
+
+### Type Compatibility Rules
+
+The type compatibility checker determines when one type is assignable to another:
+
+| Type category | Compatibility rule |
+|--------------|-------------------|
+| Simple types | Match by name (e.g., `i32` to `i32`) |
+| Union types | Value matches if it matches any member of the union |
+| Optional types | Inner type or `null` |
+| Object types | Structural — required properties present with compatible types |
+| Function types | Parameter count matches, parameter types compatible, return type compatible |
+| List types | Element type compatible |
+| Tuple types | Same length, position-by-position type compatibility |
+| Intersection types | Value satisfies all constituent types |
+
+---
+
+## Type Narrowing as Entry Maintenance
+
+Type narrowing is not a separate pass — it is the natural consequence of the ledger maintaining entry sets through control flow. After every statement, the ledger produces revised entry sets that reflect the information gained from that statement.
+
+### Narrowing Rules
+
+| Condition | True branch | False branch |
+|-----------|------------|-------------|
+| `is_type(x, T)` | `x` narrowed to `T` | `T` excluded from `x` |
+| `x != null` | `null` excluded from `x` | `x` narrowed to `null` |
+| `x == null` | `x` narrowed to `null` | `null` excluded from `x` |
+
+### Branch Merge
+
+When branches converge (after if/else, at the end of a loop, etc.), the ledger **unions** the entry sets from all branches. This means:
+
+- If `x` was narrowed to `String` in the true branch and `i32` in the false branch, after the if/else, `x`'s possible-values entry is `String | i32`.
+- If `x` was narrowed to `String` in the true branch and the false branch returns/throws, `x`'s possible-values entry remains `String` after the if.
+
+### Entry Restoration
+
+On branch exit, entries are restored to their pre-branch state, then updated with the merged result. This prevents narrowing from one branch from leaking into code after the branch.
+
+### Nested Narrowing
+
+Narrowing composes: narrowing inside a nested branch further refines the outer branch's narrowing. The ledger maintains a stack of saved entry states for nested branches.
 
 ---
 
@@ -72,14 +211,14 @@ Standards are defined with the `standard` keyword:
 
 ```ish
 standard cautious [
-    types(live),
-    null_safety(live),
-    immutability(live),
+    types(required, runtime),
+    null_safety(required, runtime),
+    immutability(required, runtime),
 ]
 
 standard api_safety extends cautious [
-    checked_exceptions(pre),
-    null_safety(pre),
+    checked_exceptions(required, build),
+    null_safety(required, build),
     undeclared_errors(typed),
 ]
 ```
@@ -98,7 +237,7 @@ Standards are applied with `@standard[name]`:
 @standard[cautious]
 
 // Inline feature override:
-@standard[overflow(saturating), checked_exceptions(live)]
+@standard[overflow(saturating), checked_exceptions(required, runtime)]
 
 // Apply a named standard to a function:
 @standard[api_safety]
@@ -136,31 +275,6 @@ Multiple entries on an item accumulate. Conflicting entries produce a discrepanc
 
 ---
 
-## Entry Type Definition Syntax
-
-Custom entry types are defined with `entry type` blocks:
-
-```ish
-entry type validated {
-    applies_to: [variable, property],
-}
-
-entry type sanitized {
-    applies_to: [variable, property],
-    requires: @[type(_)],
-}
-
-entry type thread_safe {
-    applies_to: [variable, property],
-    implies: [@[immutable]],
-    conflicts: [@[object_type(open)]],
-}
-```
-
-Entry types support inheritance via `extends`.
-
----
-
 ## Native Syntax Equivalence
 
 Native syntax and entry annotations are fully interchangeable. The following table shows the mapping:
@@ -179,15 +293,25 @@ Native syntax and entry annotations are fully interchangeable. The following tab
 
 ## Parameterized Feature States
 
-Each feature that participates in the assurance ledger has a set of valid states. These are not merely on/off; they describe *how* and *when* the feature is checked.
+Each feature that participates in the assurance ledger has states along two independent dimensions:
 
-The three base states common to most features are:
+### Annotation Dimension (`type_annotations`)
+
+Controls whether annotations are required:
 
 | State | Meaning |
 |-------|---------|
-| `optional` | The feature is not required. If present, it is checked. If absent, no discrepancy. |
-| `live` | The feature is required. Checked during live audit (execution time). |
-| `pre` | The feature is required. Checked during pre-audit (declaration time). |
+| `optional` | The annotation is not required. If present, it is checked. If absent, no discrepancy. |
+| `required` | The annotation is required. A missing annotation produces a discrepancy. |
+
+### Audit Dimension (`type_audit`)
+
+Controls when checking occurs:
+
+| State | Meaning |
+|-------|---------|
+| `runtime` | Checked during runtime audit (execution time). |
+| `build` | Checked during build audit (declaration time / compile time). |
 
 Some features have additional feature-specific states. For example:
 
@@ -195,7 +319,7 @@ Some features have additional feature-specific states. For example:
 - `implicit_conversions` takes `allow` or `deny`
 - `undeclared_errors` takes a list of allowed entry types (e.g., `@standard[@undeclared_errors(@Error)]`)
 
-When a feature appears in a standard without a parenthetical, it defaults to `live`, except for features that only apply to function declarations, which default to `pre`.
+When a feature appears in a standard without explicit annotation/audit dimensions, it defaults to `type_annotations(required)` and `type_audit(runtime)`, except for features that only apply to function declarations, which default to `type_audit(build)`.
 
 When a standard extends another and overrides a feature, the new state completely replaces the old.
 
@@ -203,28 +327,28 @@ When a standard extends another and overrides a feature, the new state completel
 
 ## Feature State Table
 
-> **Note:** This table is a placeholder. The valid states and defaults have not been fully reviewed.
+> **Note:** This table is a placeholder. The valid states and defaults have not been fully reviewed. Feature states use two dimensions: `type_annotations` (`optional` | `required`) and `type_audit` (`runtime` | `build`).
 
 | Feature | Standard state | Entry annotation | Native syntax | Applies to |
 |---------|---------------|-----------------|---------------|------------|
-| Type annotations | `types(optional\|live\|pre)` | `@[type(T)]` | `: T` | variable, parameter, property |
+| Type annotations | `types(optional\|required, runtime\|build)` | `@[type(T)]` | `: T` | variable, parameter, property |
 | Return type | (part of `types`) | `@[return_type(T)]` | `-> T` | function |
-| Null safety | `null_safety(optional\|live\|pre)` | `@[nullable]`, `@[non_null]` | `?` suffix | variable, property |
-| Mutability | `immutability(optional\|live\|pre)` | `@[mutable]`, `@[immutable]` | `mut` keyword | variable, property |
-| Numeric overflow | `overflow(optional\|wrapping\|panicking\|saturating × live\|pre)` | `@[overflow(wrapping)]`, etc. | — | variable, property |
-| Numeric precision | `numeric_precision(optional\|live\|pre)` | `@[numeric(exact)]` | explicit type | variable, property |
-| Implicit conversions | `implicit_conversions(allow\|deny × live\|pre)` | — | — | scope-level only |
+| Null safety | `null_safety(optional\|required, runtime\|build)` | `@[nullable]`, `@[non_null]` | `?` suffix | variable, property |
+| Mutability | `immutability(optional\|required, runtime\|build)` | `@[mutable]`, `@[immutable]` | `mut` keyword | variable, property |
+| Open/closed objects | `open_closed_objects(optional\|required, runtime\|build)` | `@[Open]`, `@[Closed]` | — | type, variable |
+| Numeric overflow | `overflow(optional\|wrapping\|panicking\|saturating, runtime\|build)` | `@[overflow(wrapping)]`, etc. | — | variable, property |
+| Numeric precision | `numeric_precision(optional\|required, runtime\|build)` | `@[numeric(exact)]` | explicit type | variable, property |
+| Implicit conversions | `implicit_conversions(allow\|deny, runtime\|build)` | — | — | scope-level only |
 | Undeclared errors | `undeclared_errors(any\|typed\|none)` | — | — | scope-level only |
-| Exhaustive matching | `exhaustiveness(optional\|live\|pre)` | — | — | scope-level only |
-| Unused variables | `unused_variables(optional\|live\|pre)` | `@[allow_unused]` | `_` prefix | variable |
-| Unreachable code | `unreachable_statements(optional\|live\|pre)` | `@[allow_unreachable]` | — | statement |
-| Memory model | `memory_model(optional\|gc\|rc\|owned\|stack\|auto × live\|pre)` | `@[memory(stack)]`, etc. | — | variable |
-| Polymorphism | `polymorphism_strategy(optional\|auto\|none\|enum\|mono\|vtable\|assoc × live\|pre)` | `@[polymorphism(vtable)]`, etc. | — | type, function |
-| Open/closed objects | `open_closed_objects(optional\|live\|pre)` | `@[object_type(open)]`, `@[object_type(closed)]` | — | type, variable |
-| Visibility | `visibility(optional\|live\|pre)` | `@[visibility(pub(...))]` | `pub(...)` | variable, function, type, module |
-| Sync/Async | `sync_async(optional\|live\|pre)` | `@[sync]`, `@[async]` | `async` keyword | function, block |
-| Blocking | `blocking(optional\|allow\|deny × live\|pre)` | `@[blocking(allow)]`, `@[blocking(deny)]` | — | function, block |
-| Pure functions | `pure_functions(optional\|live\|pre)` | `@[pure]`, `@[mutates_state]` | — | function |
+| Exhaustive matching | `exhaustiveness(optional\|required, runtime\|build)` | — | — | scope-level only |
+| Unused variables | `unused_variables(optional\|required, runtime\|build)` | `@[allow_unused]` | `_` prefix | variable |
+| Unreachable code | `unreachable_statements(optional\|required, runtime\|build)` | `@[allow_unreachable]` | — | statement |
+| Memory model | `memory_model(optional\|gc\|rc\|owned\|stack\|auto, runtime\|build)` | `@[memory(stack)]`, etc. | — | variable |
+| Polymorphism | `polymorphism_strategy(optional\|auto\|none\|enum\|mono\|vtable\|assoc, runtime\|build)` | `@[polymorphism(vtable)]`, etc. | — | type, function |
+| Visibility | `visibility(optional\|required, runtime\|build)` | `@[visibility(pub(...))]` | `pub(...)` | variable, function, type, module |
+| Sync/Async | `sync_async(optional\|required, runtime\|build)` | `@[sync]`, `@[async]` | `async` keyword | function, block |
+| Blocking | `blocking(optional\|allow\|deny, runtime\|build)` | `@[blocking(allow)]`, `@[blocking(deny)]` | — | function, block |
+| Pure functions | `pure_functions(optional\|required, runtime\|build)` | `@[pure]`, `@[mutates_state]` | — | function |
 
 ---
 
@@ -236,29 +360,29 @@ The built-in standards are defined in the standard library, not hardcoded into t
 standard streamlined []
 
 standard cautious [
-    types(live),
-    null_safety(live),
-    immutability(live),
+    types(required, runtime),
+    null_safety(required, runtime),
+    immutability(required, runtime),
 ]
 
 standard rigorous extends cautious [
-    types(pre),
-    null_safety(pre),
-    immutability(pre),
-    overflow(panicking, pre),
-    numeric_precision(pre),
-    implicit_conversions(deny, pre),
+    types(required, build),
+    null_safety(required, build),
+    immutability(required, build),
+    overflow(panicking, build),
+    numeric_precision(required, build),
+    implicit_conversions(deny, build),
     undeclared_errors(none),
-    exhaustiveness(pre),
-    unused_variables(pre),
-    unreachable_statements(pre),
-    memory_model(auto, pre),
-    polymorphism_strategy(auto, pre),
-    open_closed_objects(pre),
-    visibility(pre),
-    sync_async(pre),
-    blocking(deny, pre),
-    pure_functions(pre),
+    exhaustiveness(required, build),
+    unused_variables(required, build),
+    unreachable_statements(required, build),
+    memory_model(auto, build),
+    polymorphism_strategy(auto, build),
+    open_closed_objects(required, build),
+    visibility(required, build),
+    sync_async(required, build),
+    blocking(deny, build),
+    pure_functions(required, build),
 ]
 ```
 
@@ -287,7 +411,7 @@ Discrepancy: type mismatch
   Entry @type(x, i32) at line 8 conflicts with @type(x, bool) at line 10.
 
   Audit trail:
-    - @standard[cautious] at line 1 requires types(live)
+    - @standard[cautious] at line 1 requires types(required, runtime)
     - `let x: i32 = 7` at line 8 entailed entry @type(x, i32)
     - `x = false` at line 10 entailed entry @type(x, bool)
     - @type(i32) and @type(bool) are incompatible
@@ -319,7 +443,7 @@ References in discrepancy messages include project and file when the conflicting
 // ── Standard definition ────────────────────────────
 standard api_safety extends cautious [
     undeclared_errors(none),
-    null_safety(pre),
+    null_safety(required, build),
 ]
 
 // ── Custom entry types ─────────────────────────────
@@ -367,6 +491,7 @@ fn critical_calculation(values: List<f64>) -> f64 {
 
 - [ ] **Custom entry type trackability.** Custom entry types that should be required by standards need a mechanism to register as trackable features. The specific mechanism is TBD.
 - [ ] **Custom entry discrepancy messages.** When a standard requires a custom entry and a variable/function doesn't have it, should the discrepancy message differ from built-in feature discrepancies? Format TBD.
+- [ ] **Entry type definition syntax.** The `entry type` block syntax shown above is provisional. The exact fields (`applies_to`, `requires`, `implies`, `conflicts`) and their semantics need to be formalized.
 
 ---
 
@@ -374,6 +499,7 @@ fn critical_calculation(values: List<f64>) -> f64 {
 
 - [docs/spec/INDEX.md](INDEX.md)
 - [docs/spec/types.md](types.md)
-- [docs/spec/reasoning.md](reasoning.md)
-- [GLOSSARY.md](../../GLOSSARY.md)
-- [docs/project/proposals/assurance-ledger-syntax.md](../project/proposals/assurance-ledger-syntax.md)
+- [docs/spec/errors.md](errors.md)
+- [docs/architecture/vm.md](../architecture/vm.md)
+- [docs/user-guide/assurance-levels.md](../user-guide/assurance-levels.md)
+- [docs/ai-guide/orientation.md](../ai-guide/orientation.md)

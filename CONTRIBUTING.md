@@ -125,16 +125,18 @@ When implementing a feature, update project artifacts in this sequence so that a
 
 1. **Glossary** — New terms must exist before any document references them.
 2. **Roadmap** — Feature status set to "in progress."
-3. **Specification** — The normative definition of behavior.
-4. **Architecture** — How the spec is realized in the codebase.
-5. **User guide / AI guide** — How to use the feature.
-6. **Agent documentation** — Skills, copilot-instructions.md, AGENTS.md.
-7. **Acceptance tests** — Tests that define "done."
-8. **Code** — Implementation.
-9. **Unit tests** — Tests for internal correctness.
-10. **Roadmap** — Feature status set to "completed."
-11. **History** — Narrative of the work.
-12. **Index files** — Updated last.
+3. **Maturity matrix** — Update affected rows to reflect current state.
+4. **Specification** — The normative definition of behavior.
+5. **Architecture** — How the spec is realized in the codebase.
+6. **User guide / AI guide** — How to use the feature.
+7. **Agent documentation** — Skills, copilot-instructions.md, AGENTS.md.
+8. **Acceptance tests** — Tests that define "done."
+9. **Code** — Implementation.
+10. **Unit tests** — Tests for internal correctness.
+11. **Roadmap** — Feature status set to "completed."
+12. **Maturity matrix** — Update affected rows to reflect final state.
+13. **History** — Narrative of the work.
+14. **Index files** — Updated last.
 
 Authority order is enforced by agent instructions only, not by tooling.
 

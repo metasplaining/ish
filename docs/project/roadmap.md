@@ -3,7 +3,7 @@ title: "Project Roadmap"
 category: project
 audience: [human-dev, ai-agent]
 status: placeholder
-last-verified: 2026-03-10
+last-verified: 2026-03-19
 depends-on: []
 ---
 
@@ -33,12 +33,13 @@ The language is being designed iteratively. A Rust prototype explores key ideas.
 - [x] Shell: File and inline execution modes
 - [x] Shell: Command execution (builtins, external commands, pipes, redirections, globs, `$?`)
 - [x] Proposal process improvements (three-document lifecycle, six skills, authority order)
+- [x] Error handling design (design complete; implementation pending entry-based error model)
+- [x] Types, errors, and assurance ledger consistency
 
 ### In Progress
 
 - [ ] Memory management design (GC vs. manual vs. arena)
 - [ ] Polymorphism strategy (structural vs. nominal interplay)
-- [ ] Error handling design
 
 ### Future
 

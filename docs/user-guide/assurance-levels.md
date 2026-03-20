@@ -3,7 +3,7 @@ title: "User Guide: Assurance Levels"
 category: user-guide
 audience: [human-dev]
 status: placeholder
-last-verified: 2026-03-14
+last-verified: 2026-03-19
 depends-on: [docs/spec/types.md, docs/spec/assurance-ledger.md]
 ---
 
@@ -27,22 +27,30 @@ ish lets you choose, **per feature**, where on the continuum you want to be. Sta
 
 Assurance levels are configured through **standards** — named sets of feature configurations applied to scopes. Individual items can be annotated with **entries** that record facts about them.
 
-```
+```ish
 // Low-assurance: no type annotation required
 let x = 42
 
 // High-assurance: explicit type annotation (an entry in the ledger)
-let x: Int = 42
+let x: i32 = 42
 ```
 
 Standards are applied with `@standard[name]`:
 
-```
-@standard[rigorous] {
-    // All features in this scope are high-assurance
-    let x: Int = 42
+```ish
+@standard[rigorous]
+fn calculate(x: f64, y: f64) -> f64 {
+    // All features in this function are high-assurance
+    return x * y + y
 }
 ```
+
+Each feature in a standard has two independent dimensions:
+
+- **`type_annotations`**: `optional` (annotations not required) or `required` (missing annotations are a discrepancy)
+- **`type_audit`**: `runtime` (checked at execution time) or `build` (checked at build time)
+
+Type checking itself is a ledger feature — the VM checks type compatibility on assignments, function calls, and returns, with the standard controlling when and how strictly.
 
 See [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md) for the full specification of how standards, entries, and the assurance ledger work.
 

@@ -1,6 +1,7 @@
 use std::fmt;
+use std::rc::Rc;
 
-use crate::value::Value;
+use crate::value::{Value, new_object};
 
 #[derive(Debug, Clone)]
 pub struct RuntimeError {
@@ -19,6 +20,21 @@ impl RuntimeError {
     pub fn thrown(value: Value) -> Self {
         let message = format!("Thrown: {}", value.to_display_string());
         RuntimeError { message, thrown_value: Some(value) }
+    }
+
+    /// Create a RuntimeError wrapping a SystemError object with the given
+    /// message and error code.  The thrown value is an ish object with
+    /// `message` and `code` properties, matching the entry-based error model.
+    pub fn system_error(msg: impl Into<String>, code: impl Into<String>) -> Self {
+        let msg = msg.into();
+        let code = code.into();
+        let mut map = std::collections::HashMap::new();
+        map.insert("message".to_string(), Value::String(Rc::new(msg.clone())));
+        map.insert("code".to_string(), Value::String(Rc::new(code)));
+        RuntimeError {
+            message: msg,
+            thrown_value: Some(new_object(map)),
+        }
     }
 }
 

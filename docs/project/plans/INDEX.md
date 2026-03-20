@@ -15,6 +15,7 @@ Consolidated TODO lists derived from accepted design proposals. Each plan is the
 
 | Date | Topic | Status | File |
 |------|-------|--------|------|
+| 2026-03-19 | Types, Errors, and Assurance Ledger Consistency | completed | [types-errors-assurance-consistency.md](types-errors-assurance-consistency.md) |
 | 2026-03-18 | Proposal Process Improvements | completed | [proposal-process-improvements.md](proposal-process-improvements.md) |
 
 ---
