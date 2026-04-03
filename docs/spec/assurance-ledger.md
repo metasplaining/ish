@@ -130,6 +130,9 @@ The following entry types are pre-registered at startup:
 | `Type` | — | — | Structural type entry |
 | `Open` | — | — | Object is open to extra properties |
 | `Closed` | — | — | Object has exactly declared properties |
+| `Complexity` | — | — | Whether a block completes quickly (`simple`) or may take a long time (`complex`). Applies to functions and blocks. See [docs/spec/concurrency.md](concurrency.md). |
+| `Yielding` | — | — | Whether a block can suspend execution (`yielding`) or never suspends (`unyielding`). Applies to functions and blocks. See [docs/spec/concurrency.md](concurrency.md). |
+| `Parallel` | — | — | Marks a function as executing on a separate thread pool thread via a parallel shim. Implies `@[yielding]`. Applies to functions. See [docs/spec/concurrency.md](concurrency.md). |
 
 `Error` is the only predefined error-related entry type. Other error classifications (`CodedError`, `SystemError`, `TypeError`, etc.) are ordinary ish types defined structurally — see [docs/spec/errors.md](errors.md) for the structural error hierarchy and throw audit semantics.
 
@@ -299,6 +302,9 @@ Native syntax and entry annotations are fully interchangeable. The following tab
 | `?` suffix | `@[nullable]` | variable, property |
 | `mut` | `@[mutable]` | variable, property |
 | `async` | `@[async]` | function, block |
+| `await` | `@[await]` | expression |
+| `spawn` | `@[spawn]` | expression |
+| `yield` | `@[yield]` | statement |
 | Error union types | `@[throws(E)]` | function |
 | `pub(...)` | `@[visibility(pub(...))]` | variable, function, type, module |
 
@@ -359,8 +365,12 @@ When a standard extends another and overrides a feature, the new state completel
 | Memory model | `memory_model(optional\|gc\|rc\|owned\|stack\|auto, runtime\|build)` | `@[memory(stack)]`, etc. | — | variable |
 | Polymorphism | `polymorphism_strategy(optional\|auto\|none\|enum\|mono\|vtable\|assoc, runtime\|build)` | `@[polymorphism(vtable)]`, etc. | — | type, function |
 | Visibility | `visibility(optional\|required, runtime\|build)` | `@[visibility(pub(...))]` | `pub(...)` | variable, function, type, module |
-| Sync/Async | `sync_async(optional\|required, runtime\|build)` | `@[sync]`, `@[async]` | `async` keyword | function, block |
-| Blocking | `blocking(optional\|allow\|deny, runtime\|build)` | `@[blocking(allow)]`, `@[blocking(deny)]` | — | function, block |
+| Sync/Async | `async_annotation(optional\|required, runtime\|build)` | `@[async]` | `async` keyword | function, block |
+| Await required | `await_required(optional\|required, runtime\|build)` | `@[await]` | `await` keyword | expression |
+| Guaranteed yield | `guaranteed_yield(disabled\|enabled)` | — | — | scope-level only |
+| Yield control | `yield_control(time\|time_and_count)` | `@[yield_budget(Xus)]`, `@[unyielding]` | `yield every N` | function, block |
+| Future drop | `future_drop(disabled\|enabled)` | — | — | scope-level only |
+| Blocking | ~~`blocking(optional\|allow\|deny, runtime\|build)`~~ | ~~`@[blocking(allow)]`~~ | — | **Eliminated.** Replaced by `Parallel` entry type. See [docs/spec/concurrency.md](concurrency.md). |
 | Pure functions | `pure_functions(optional\|required, runtime\|build)` | `@[pure]`, `@[mutates_state]` | — | function |
 
 ---
@@ -376,6 +386,10 @@ standard cautious [
     types(required, runtime),
     null_safety(required, runtime),
     immutability(required, runtime),
+    async_annotation(required, runtime),
+    await_required(required, runtime),
+    guaranteed_yield(enabled),
+    future_drop(enabled),
 ]
 
 standard rigorous extends cautious [
@@ -393,8 +407,11 @@ standard rigorous extends cautious [
     polymorphism_strategy(auto, build),
     open_closed_objects(required, build),
     visibility(required, build),
-    sync_async(required, build),
-    blocking(deny, build),
+    async_annotation(required, build),
+    await_required(required, build),
+    guaranteed_yield(enabled),
+    future_drop(enabled),
+    yield_control(time_and_count),
     pure_functions(required, build),
 ]
 ```
@@ -513,6 +530,7 @@ fn critical_calculation(values: List<f64>) -> f64 {
 - [AGENTS.md](../../AGENTS.md)
 - [docs/spec/INDEX.md](INDEX.md)
 - [docs/spec/types.md](types.md)
+- [docs/spec/concurrency.md](concurrency.md)
 - [docs/spec/errors.md](errors.md)
 - [docs/architecture/vm.md](../architecture/vm.md)
 - [docs/user-guide/assurance-levels.md](../user-guide/assurance-levels.md)

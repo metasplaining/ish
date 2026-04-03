@@ -96,6 +96,19 @@ ish has four built-in special types representing different kinds of "nothing":
 | `Map`    | A collection of key-value pairs with unique keys.                                              |
 | `Object` | A record with named properties, each of which has its own type.                                |
 
+### Concurrency and I/O Types
+
+| Type | Description |
+|------|-------------|
+| `Future<T>` | Represents an eventual result of type `T`. Created by `spawn`. Must be awaited to obtain the result. Dropping a future cancels the underlying task. Uses identity equality (`Rc::ptr_eq`) — two futures are equal iff they reference the same allocation. |
+| `Stream<T>` | An async sequence of values. `Stream<ByteBuffer>` uses byte-oriented I/O; `Stream<T>` for other types uses channels. Supports combinators (`map`, `filter`, `take`, `zip`, `lines`, `decode`). |
+| `StreamWriter<T>` | The write half of a stream — the producer side that sends values. |
+| `Reader` | Wraps a Tokio `AsyncRead` source for byte-level read access. |
+| `Writer` | Wraps a Tokio `AsyncWrite` sink for byte-level write access. |
+| `ByteBuffer` | A contiguous sequence of bytes. Abstracts over `bytes::Bytes` (immutable) and `bytes::BytesMut` (mutable). Mutability is expressed via the `Mutable` ledger entry. |
+
+See [docs/spec/concurrency.md](concurrency.md) for full concurrency type semantics.
+
 ### Tuple Types
 
 Tuples are fixed-length sequences where each element has its own type:
@@ -528,6 +541,7 @@ Open questions for the type system. See also [docs/project/open-questions.md](..
 ## Referenced by
 
 - [docs/spec/INDEX.md](INDEX.md)
+- [docs/spec/concurrency.md](concurrency.md)
 - [docs/spec/errors.md](errors.md)
 - [docs/spec/assurance-ledger.md](assurance-ledger.md)
 - [docs/architecture/vm.md](../architecture/vm.md)

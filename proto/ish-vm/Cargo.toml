@@ -7,6 +7,9 @@ edition = "2021"
 ish-ast = { path = "../ish-ast" }
 gc = { version = "0.5", features = ["derive"] }
 serde_json = "1"
+tokio = { workspace = true }
+crossbeam = { version = "0.8", features = ["crossbeam-channel"] }
 
 [dev-dependencies]
 ish-parser = { path = "../ish-parser" }
+tokio = { version = "1", features = ["rt", "time", "process", "sync", "macros", "rt-multi-thread"] }

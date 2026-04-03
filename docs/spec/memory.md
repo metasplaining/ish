@@ -32,8 +32,23 @@ Open questions for memory management. See also [docs/project/open-questions.md](
 
 ---
 
+## Concurrency and Memory
+
+The garbage collector remains single-threaded. All GC-managed values (`Gc<>`, `GcCell<>`, `Value`, `Environment`) are confined to the `LocalSet` thread and are `!Send`. Concurrent ish tasks share the GC heap freely because they all run on the same thread via `spawn_local`.
+
+Parallel tasks (Rust-implemented standard library functions running on Tokio's thread pool) use Rust-managed memory and cannot access the GC heap directly. Data crossing thread boundaries follows these rules:
+
+- **Immutable `ByteBuffer`:** Backed by `bytes::Bytes`. Cloned to the parallel task with O(1) reference count increment. No copy.
+- **Mutable `ByteBuffer`:** Backed by `bytes::BytesMut`. Frozen to immutable (O(1) via `BytesMut::freeze()`) or moved (ownership transferred out of the ish heap; the ish variable becomes invalid).
+- **Complex ish types (objects, lists):** Copy-in/copy-out semantics in the parallel shim. The shim serializes the ish value to Rust-native types before spawning, and deserializes back on completion.
+
+See [docs/spec/concurrency.md](concurrency.md) for the full data transfer model.
+
+---
+
 ## Referenced by
 
 - [docs/spec/INDEX.md](INDEX.md)
+- [docs/spec/concurrency.md](concurrency.md)
 - [docs/spec/types.md](types.md)
 - [GLOSSARY.md](../../GLOSSARY.md)

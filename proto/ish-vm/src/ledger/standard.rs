@@ -120,11 +120,20 @@ impl StandardRegistry {
             AnnotationDimension::Required,
             AuditDimension::Runtime,
         );
+        let optional_runtime = FeatureState::new(
+            AnnotationDimension::Optional,
+            AuditDimension::Runtime,
+        );
         self.register(
             Standard::new("cautious")
                 .with_feature("types", required_runtime.clone())
                 .with_feature("null_safety", required_runtime.clone())
-                .with_feature("immutability", required_runtime),
+                .with_feature("immutability", required_runtime.clone())
+                .with_feature("async_annotation", required_runtime.clone())
+                .with_feature("await_required", required_runtime.clone())
+                .with_feature("guaranteed_yield", required_runtime.clone())
+                .with_feature("yield_control", optional_runtime.clone().with_parameter("time"))
+                .with_feature("future_drop", required_runtime),
         );
 
         // rigorous: extends cautious, all features required at build time.
@@ -154,7 +163,12 @@ impl StandardRegistry {
                 .with_feature("visibility", required_build.clone())
                 .with_feature("sync_async", required_build.clone())
                 .with_feature("blocking", required_build.clone().with_parameter("deny"))
-                .with_feature("pure_functions", required_build),
+                .with_feature("pure_functions", required_build.clone())
+                .with_feature("async_annotation", required_build.clone())
+                .with_feature("await_required", required_build.clone())
+                .with_feature("guaranteed_yield", required_build.clone())
+                .with_feature("yield_control", required_build.clone().with_parameter("time_and_count"))
+                .with_feature("future_drop", required_build),
         );
     }
 }
@@ -219,18 +233,24 @@ mod tests {
     }
 
     #[test]
-    fn builtin_cautious_has_three_features() {
+    fn builtin_cautious_has_expected_features() {
         let mut reg = StandardRegistry::new();
         reg.register_builtins();
         let features = reg.resolve("cautious").unwrap();
-        assert_eq!(features.len(), 3);
+        assert_eq!(features.len(), 8);
+        // Original features
         assert!(features.contains_key("types"));
         assert!(features.contains_key("null_safety"));
         assert!(features.contains_key("immutability"));
-        for state in features.values() {
-            assert_eq!(state.annotation, AnnotationDimension::Required);
-            assert_eq!(state.audit, AuditDimension::Runtime);
-        }
+        // Concurrency features
+        assert!(features.contains_key("async_annotation"));
+        assert!(features.contains_key("await_required"));
+        assert!(features.contains_key("guaranteed_yield"));
+        assert!(features.contains_key("yield_control"));
+        assert!(features.contains_key("future_drop"));
+        // All required/runtime except yield_control which is optional/runtime
+        assert_eq!(features["types"].annotation, AnnotationDimension::Required);
+        assert_eq!(features["yield_control"].annotation, AnnotationDimension::Optional);
     }
 
     #[test]

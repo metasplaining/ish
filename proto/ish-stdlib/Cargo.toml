@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 ish-ast = { path = "../ish-ast" }
 ish-vm = { path = "../ish-vm" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

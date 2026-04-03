@@ -85,6 +85,43 @@ throw { code: "E001" }
 throw { message: "division by zero", code: "E001" }
 ```
 
+## 9. Await/Spawn on Non-Call Expressions
+
+**Wrong**: Using `await` or `spawn` on a non-function-call expression.
+
+```ish
+// BAD — parse error (produces Incomplete node)
+let v = await 42
+let x = spawn "hello"
+```
+
+**Right**: `await` and `spawn` require a function call.
+
+```ish
+let v = await some_function()
+let x = spawn some_function()
+```
+
+## 10. Await/Spawn on Unyielding Functions
+
+**Wrong**: Using `await` or `spawn` on an explicitly unyielding function.
+
+```ish
+// BAD — E012 (await) or E013 (spawn)
+@[unyielding]
+fn pure() { return 5 }
+
+let v = await pure()   // E012
+let x = spawn pure()   // E013
+```
+
+**Right**: Only `await`/`spawn` functions that are yielding or ambiguous.
+
+```ish
+fn maybe_yields() { return do_work() }
+let v = await maybe_yields()   // OK — ambiguous, passes through if non-Future
+```
+
 ---
 
 ## Referenced by

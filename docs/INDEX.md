@@ -37,7 +37,7 @@ The authoritative specification of ish syntax and semantics.
 | [spec/execution.md](spec/execution.md) | Execution configurations |
 | [spec/memory.md](spec/memory.md) | Memory management |
 | [spec/polymorphism.md](spec/polymorphism.md) | Polymorphism strategies |
-| [spec/syntax.md](spec/syntax.md) | Formal syntax (placeholder) |
+| [spec/syntax.md](spec/syntax.md) | Formal syntax (placeholder) |\n| [spec/concurrency.md](spec/concurrency.md) | Concurrency model |
 
 ---
 

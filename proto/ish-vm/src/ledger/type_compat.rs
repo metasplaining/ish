@@ -62,10 +62,6 @@ pub fn is_compatible(value: &Value, annotation: &TypeAnnotation) -> bool {
                     // Check param count matches.
                     func_ref.params.len() == params.len()
                 }
-                Value::BuiltinFunction(_) => {
-                    // Builtins have no param info at the Value level; accept.
-                    true
-                }
                 _ => false,
             }
         }
@@ -111,7 +107,7 @@ fn is_simple_compatible(value: &Value, type_name: &str) -> bool {
         // Structural type categories.
         "object" => matches!(value, Value::Object(_)),
         "list" => matches!(value, Value::List(_)),
-        "function" | "fn" => matches!(value, Value::Function(_) | Value::BuiltinFunction(_)),
+        "function" | "fn" => matches!(value, Value::Function(_)),
 
         // "any" matches everything; "never" matches nothing.
         "any" => true,
@@ -444,8 +440,10 @@ mod tests {
             params: vec!["a".into(), "b".into()],
             param_types: vec![None, None],
             return_type: None,
-            body: ish_ast::Statement::Block { statements: vec![] },
+            implementation: crate::value::FunctionImplementation::Interpreted(ish_ast::Statement::Block { statements: vec![] }),
             closure_env: crate::environment::Environment::new(),
+            is_async: false,
+            has_yielding_entry: None,
         }));
         assert!(is_compatible(&func, &fn_type));
     }
@@ -461,8 +459,10 @@ mod tests {
             params: vec!["a".into(), "b".into()],
             param_types: vec![None, None],
             return_type: None,
-            body: ish_ast::Statement::Block { statements: vec![] },
+            implementation: crate::value::FunctionImplementation::Interpreted(ish_ast::Statement::Block { statements: vec![] }),
             closure_env: crate::environment::Environment::new(),
+            is_async: false,
+            has_yielding_entry: None,
         }));
         assert!(!is_compatible(&func, &fn_type));
     }

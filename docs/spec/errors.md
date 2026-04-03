@@ -219,12 +219,26 @@ Well-known error codes are documented in [docs/errors/INDEX.md](../errors/INDEX.
 | E008 | `FileError` | File I/O error |
 | E009 | `TypeError` | Null unwrap |
 | E010 | `SystemError` | Shell command error |
+| E011 | `ConcurrencyError` | Concurrency error (cancelled task, panicked task, assurance discrepancy, already-awaited future) |
+| E012 | `TypeError` | Await type mismatch (`await` applied to a call to an explicitly unyielding function) |
+| E013 | `ConcurrencyError` | Spawn type mismatch (`spawn` applied to a call to an explicitly unyielding function) |
+
+### Concurrency Errors
+
+**Concurrency error (E011):** A catch-all for concurrency-related runtime errors. Covers: awaiting a cancelled `Future`, awaiting a panicked task, `future_drop` discrepancy (dropping a future without awaiting it when the feature is enabled), and attempting to await an already-awaited future. Catchable via `try`/`catch`.
+
+**Await type mismatch (E012):** Thrown when `await` is applied to a call to a function with an explicit unyielding entry (`has_yielding_entry: Some(false)`). The error is thrown *before* the function is called. Does not apply to the ambiguous case (functions with no Yielding entry).
+
+**Spawn type mismatch (E013):** Thrown when `spawn` is applied to a call to a function with an explicit unyielding entry. Like E012, the error is thrown before the function is called.
+
+See [docs/spec/concurrency.md](concurrency.md) for full cancellation semantics.
 
 ---
 
 ## Referenced by
 
 - [docs/spec/INDEX.md](INDEX.md)
+- [docs/spec/concurrency.md](concurrency.md)
 - [docs/spec/types.md](types.md)
 - [docs/spec/assurance-ledger.md](assurance-ledger.md)
 - [docs/architecture/vm.md](../architecture/vm.md)

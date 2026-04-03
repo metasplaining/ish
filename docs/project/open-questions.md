@@ -4,7 +4,7 @@ category: project
 audience: [all]
 status: draft
 last-verified: 2026-03-14
-depends-on: [docs/spec/types.md, docs/spec/modules.md, docs/spec/reasoning.md, docs/spec/assurance-ledger.md, docs/spec/execution.md, docs/spec/memory.md, docs/spec/polymorphism.md, docs/spec/syntax.md]
+depends-on: [docs/spec/types.md, docs/spec/modules.md, docs/spec/reasoning.md, docs/spec/assurance-ledger.md, docs/spec/execution.md, docs/spec/memory.md, docs/spec/polymorphism.md, docs/spec/syntax.md, docs/spec/concurrency.md]
 ---
 
 # ish Open Questions
@@ -22,7 +22,7 @@ See also [docs/spec/syntax.md](../spec/syntax.md).
 - [x] **~~No description of functions.~~** Resolved — `fn` for declaration, TypeScript-style arrow functions `(x) => expr` for lambdas, closures supported, default parameters supported. Function types use `fn(Args) -> Ret`. See [docs/spec/syntax.md](../spec/syntax.md).
 - [x] **~~No description of error handling.~~** Resolved — ish uses thrown exceptions with try/catch/finally, with blocks, defer, and the `?` operator. See [docs/user-guide/error-handling.md](../user-guide/error-handling.md) and [proposal](proposals/error-handling.md).
 - [x] **~~Error handling open questions from proposal.~~** Resolved — `with` identifies close method (TBD convention vs. annotation). Defer is function-scoped per [defer-scoping proposal](proposals/defer-scoping.md). The `?` operator is syntactic sugar for throw-on-error. See [docs/spec/syntax.md](../spec/syntax.md).
-- [ ] **No description of concurrency / parallelism.** Async/await? Threads? Channels? Actors? Interaction with memory management?
+- [x] **~~No description of concurrency / parallelism.~~** Resolved — cooperative multitasking via async/await on Tokio, parallelism via parallel shims, guaranteed yield mechanism, two-thread shell/VM architecture. See [docs/spec/concurrency.md](../spec/concurrency.md) and [concurrency proposal](proposals/concurrency.md).
 
 ---
 
@@ -297,6 +297,17 @@ See also [docs/spec/polymorphism.md — Open Questions](../spec/polymorphism.md#
 
 ---
 
+## Concurrency
+
+See also [docs/spec/concurrency.md — Open Questions](../spec/concurrency.md#open-questions).
+
+- [ ] **Program exit with running futures.** When the main program finishes but spawned futures are still running, should the runtime wait for them, cancel them, or apply a timeout?
+- [ ] **FFI and blocking.** If ish supports arbitrary C/Rust FFI calls, blocking may need reintroduction — a blocking FFI call on the LocalSet thread would stall all ish tasks.
+- [ ] **Function yielding categorization at declaration.** Every function should eventually be categorized as `yielding` or `unyielding` at declaration time. Currently, functions without explicit annotations have no Yielding entry. This means `await ambiguous_fn()` silently passes through non-Future values. When function declaration categorization is implemented, `await` should check the callee's category and E012 should be thrown for all unyielding calls — eliminating the ambiguous pass-through case. See concurrency-correctness proposal Decisions 2–3.
+- [ ] **Builtin replacement by standard library.** All builtins are temporary scaffolding. They should be replaced by standard library functions when the standard library is available. Parallel builtins should become parallel stdlib functions. See concurrency-correctness proposal Decision 7.
+
+---
+
 ## Referenced by
 
 - [docs/INDEX.md](../INDEX.md)
@@ -307,3 +318,4 @@ See also [docs/spec/polymorphism.md — Open Questions](../spec/polymorphism.md#
 - [docs/spec/execution.md](../spec/execution.md)
 - [docs/spec/memory.md](../spec/memory.md)
 - [docs/spec/polymorphism.md](../spec/polymorphism.md)
+- [docs/spec/concurrency.md](../spec/concurrency.md)

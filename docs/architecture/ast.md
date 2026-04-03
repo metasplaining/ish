@@ -35,6 +35,8 @@ pub enum Expression {
     Lambda { params, body },        // (x) => { ... }
     StringInterpolation(Vec<StringPart>), // "hello {name}!"
     EnvVar(String),                 // $HOME
+    Await { callee, args },         // await f(a, b) — callee + args (not generic expr)
+    Spawn { callee, args },         // spawn f(a, b) — callee + args (not generic expr)
 }
 
 pub enum Statement {

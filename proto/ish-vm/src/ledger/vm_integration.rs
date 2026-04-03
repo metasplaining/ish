@@ -216,7 +216,7 @@ mod tests {
         let mut state = LedgerState::new();
         state.push_standard("cautious".to_string());
         let features = state.active_features();
-        assert_eq!(features.len(), 3);
+        assert_eq!(features.len(), 8);
         assert!(features.contains_key("types"));
 
         // Push rigorous on top — its features override cautious.

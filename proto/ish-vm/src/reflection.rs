@@ -53,12 +53,12 @@ pub fn stmt_to_value(stmt: &Statement) -> Value {
                 map.insert("else_block".to_string(), Value::Null);
             }
         }
-        Statement::While { condition, body } => {
+        Statement::While { condition, body, .. } => {
             map.insert("kind".to_string(), str_val("while"));
             map.insert("condition".to_string(), expr_to_value(condition));
             map.insert("body".to_string(), stmt_to_value(body));
         }
-        Statement::ForEach { variable, iterable, body } => {
+        Statement::ForEach { variable, iterable, body, .. } => {
             map.insert("kind".to_string(), str_val("for_each"));
             map.insert("variable".to_string(), str_val(variable));
             map.insert("iterable".to_string(), expr_to_value(iterable));
@@ -177,6 +177,9 @@ pub fn stmt_to_value(stmt: &Statement) -> Value {
             map.insert("kind".to_string(), str_val("incomplete"));
             map.insert("incomplete_kind".to_string(), str_val(&format!("{:?}", kind)));
         }
+        Statement::Yield => {
+            map.insert("kind".to_string(), str_val("yield"));
+        }
     }
     Value::Object(Gc::new(GcCell::new(map)))
 }
@@ -263,7 +266,7 @@ pub fn expr_to_value(expr: &Expression) -> Value {
             map.insert("object".to_string(), expr_to_value(object));
             map.insert("index".to_string(), expr_to_value(index));
         }
-        Expression::Lambda { params, body } => {
+        Expression::Lambda { params, body, .. } => {
             map.insert("kind".to_string(), str_val("lambda"));
             let param_vals: Vec<Value> = params
                 .iter()
@@ -308,6 +311,20 @@ pub fn expr_to_value(expr: &Expression) -> Value {
         Expression::Incomplete { kind } => {
             map.insert("kind".to_string(), str_val("incomplete"));
             map.insert("incomplete_kind".to_string(), str_val(&format!("{:?}", kind)));
+        }
+        Expression::Await { callee, args } => {
+            map.insert("kind".to_string(), str_val("await"));
+            map.insert("callee".to_string(), expr_to_value(callee));
+            map.insert("args".to_string(), Value::List(Gc::new(GcCell::new(
+                args.iter().map(|a| expr_to_value(a)).collect(),
+            ))));
+        }
+        Expression::Spawn { callee, args } => {
+            map.insert("kind".to_string(), str_val("spawn"));
+            map.insert("callee".to_string(), expr_to_value(callee));
+            map.insert("args".to_string(), Value::List(Gc::new(GcCell::new(
+                args.iter().map(|a| expr_to_value(a)).collect(),
+            ))));
         }
     }
     Value::Object(Gc::new(GcCell::new(map)))
@@ -390,6 +407,7 @@ pub fn value_to_stmt(value: &Value) -> Result<Statement, RuntimeError> {
             Ok(Statement::While {
                 condition: cond,
                 body: Box::new(body),
+                yield_every: None,
             })
         }
         "for_each" => {
@@ -400,6 +418,7 @@ pub fn value_to_stmt(value: &Value) -> Result<Statement, RuntimeError> {
                 variable,
                 iterable,
                 body: Box::new(body),
+                yield_every: None,
             })
         }
         "return" => {
@@ -427,6 +446,7 @@ pub fn value_to_stmt(value: &Value) -> Result<Statement, RuntimeError> {
                 body: Box::new(body),
                 visibility: None,
                 type_params: vec![],
+                is_async: false,
             })
         }
         "throw" => {
@@ -751,12 +771,12 @@ fn parse_unop(s: &str) -> Result<UnaryOperator, RuntimeError> {
 
 /// Register AST factory built-in functions (callable from ish programs).
 pub fn register_ast_builtins(env: &crate::environment::Environment) {
-    use crate::value::new_builtin;
+    use crate::value::new_compiled_function;
 
     // ast_program(statements_list) -> program object
     env.define(
         "ast_program".into(),
-        new_builtin("ast_program", |args| {
+        new_compiled_function("ast_program", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_program expects 1 argument (list of statements)", "E004"));
             }
@@ -764,13 +784,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("kind".to_string(), str_val("program"));
             map.insert("statements".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_literal(value) -> literal node
     env.define(
         "ast_literal".into(),
-        new_builtin("ast_literal", |args| {
+        new_compiled_function("ast_literal", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_literal expects 1 argument", "E004"));
             }
@@ -788,13 +808,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             };
             map.insert("literal_type".to_string(), str_val(lit_type));
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_identifier(name) -> identifier node
     env.define(
         "ast_identifier".into(),
-        new_builtin("ast_identifier", |args| {
+        new_compiled_function("ast_identifier", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_identifier expects 1 argument", "E004"));
             }
@@ -802,13 +822,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("kind".to_string(), str_val("identifier"));
             map.insert("name".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_binary_op(op, left, right) -> binary_op node
     env.define(
         "ast_binary_op".into(),
-        new_builtin("ast_binary_op", |args| {
+        new_compiled_function("ast_binary_op", vec![], vec![], None, |args| {
             if args.len() != 3 {
                 return Err(RuntimeError::system_error("ast_binary_op expects 3 arguments", "E004"));
             }
@@ -818,13 +838,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("left".to_string(), args[1].clone());
             map.insert("right".to_string(), args[2].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_unary_op(op, operand)
     env.define(
         "ast_unary_op".into(),
-        new_builtin("ast_unary_op", |args| {
+        new_compiled_function("ast_unary_op", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("ast_unary_op expects 2 arguments", "E004"));
             }
@@ -833,13 +853,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("op".to_string(), args[0].clone());
             map.insert("operand".to_string(), args[1].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_function_call(callee, args_list)
     env.define(
         "ast_function_call".into(),
-        new_builtin("ast_function_call", |args| {
+        new_compiled_function("ast_function_call", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("ast_function_call expects 2 arguments", "E004"));
             }
@@ -848,13 +868,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("callee".to_string(), args[0].clone());
             map.insert("args".to_string(), args[1].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_block(statements_list)
     env.define(
         "ast_block".into(),
-        new_builtin("ast_block", |args| {
+        new_compiled_function("ast_block", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_block expects 1 argument", "E004"));
             }
@@ -862,13 +882,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("kind".to_string(), str_val("block"));
             map.insert("statements".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_return(value_or_null)
     env.define(
         "ast_return".into(),
-        new_builtin("ast_return", |args| {
+        new_compiled_function("ast_return", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_return expects 1 argument", "E004"));
             }
@@ -876,13 +896,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("kind".to_string(), str_val("return"));
             map.insert("value".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_var_decl(name, value)
     env.define(
         "ast_var_decl".into(),
-        new_builtin("ast_var_decl", |args| {
+        new_compiled_function("ast_var_decl", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("ast_var_decl expects 2 arguments", "E004"));
             }
@@ -891,13 +911,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("name".to_string(), args[0].clone());
             map.insert("value".to_string(), args[1].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_if(condition, then_block, else_block_or_null)
     env.define(
         "ast_if".into(),
-        new_builtin("ast_if", |args| {
+        new_compiled_function("ast_if", vec![], vec![], None, |args| {
             if args.len() != 3 {
                 return Err(RuntimeError::system_error("ast_if expects 3 arguments", "E004"));
             }
@@ -907,13 +927,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("then_block".to_string(), args[1].clone());
             map.insert("else_block".to_string(), args[2].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_while(condition, body)
     env.define(
         "ast_while".into(),
-        new_builtin("ast_while", |args| {
+        new_compiled_function("ast_while", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("ast_while expects 2 arguments", "E004"));
             }
@@ -922,13 +942,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("condition".to_string(), args[0].clone());
             map.insert("body".to_string(), args[1].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_function_decl(name, params_list, body)
     env.define(
         "ast_function_decl".into(),
-        new_builtin("ast_function_decl", |args| {
+        new_compiled_function("ast_function_decl", vec![], vec![], None, |args| {
             if args.len() != 3 {
                 return Err(RuntimeError::system_error("ast_function_decl expects 3 arguments", "E004"));
             }
@@ -938,13 +958,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("params".to_string(), args[1].clone());
             map.insert("body".to_string(), args[2].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_expr_stmt(expression)
     env.define(
         "ast_expr_stmt".into(),
-        new_builtin("ast_expr_stmt", |args| {
+        new_compiled_function("ast_expr_stmt", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_expr_stmt expects 1 argument", "E004"));
             }
@@ -952,13 +972,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("kind".to_string(), str_val("expr_stmt"));
             map.insert("expression".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_lambda(params_list, body)
     env.define(
         "ast_lambda".into(),
-        new_builtin("ast_lambda", |args| {
+        new_compiled_function("ast_lambda", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("ast_lambda expects 2 arguments", "E004"));
             }
@@ -967,13 +987,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("params".to_string(), args[0].clone());
             map.insert("body".to_string(), args[1].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_property_access(object, property)
     env.define(
         "ast_property_access".into(),
-        new_builtin("ast_property_access", |args| {
+        new_compiled_function("ast_property_access", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("ast_property_access expects 2 arguments", "E004"));
             }
@@ -982,13 +1002,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("object".to_string(), args[0].clone());
             map.insert("property".to_string(), args[1].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_index_access(object, index)
     env.define(
         "ast_index_access".into(),
-        new_builtin("ast_index_access", |args| {
+        new_compiled_function("ast_index_access", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("ast_index_access expects 2 arguments", "E004"));
             }
@@ -997,13 +1017,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("object".to_string(), args[0].clone());
             map.insert("index".to_string(), args[1].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_object_literal(pairs_list)
     env.define(
         "ast_object_literal".into(),
-        new_builtin("ast_object_literal", |args| {
+        new_compiled_function("ast_object_literal", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_object_literal expects 1 argument", "E004"));
             }
@@ -1011,13 +1031,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("kind".to_string(), str_val("object_literal"));
             map.insert("pairs".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_list_literal(elements_list)
     env.define(
         "ast_list_literal".into(),
-        new_builtin("ast_list_literal", |args| {
+        new_compiled_function("ast_list_literal", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_list_literal expects 1 argument", "E004"));
             }
@@ -1025,26 +1045,26 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("kind".to_string(), str_val("list_literal"));
             map.insert("elements".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_param(name) -> parameter object
     env.define(
         "ast_param".into(),
-        new_builtin("ast_param", |args| {
+        new_compiled_function("ast_param", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_param expects 1 argument", "E004"));
             }
             let mut map = HashMap::new();
             map.insert("name".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_assignment(target, value)
     env.define(
         "ast_assignment".into(),
-        new_builtin("ast_assignment", |args| {
+        new_compiled_function("ast_assignment", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("ast_assignment expects 2 arguments", "E004"));
             }
@@ -1053,13 +1073,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("target".to_string(), args[0].clone());
             map.insert("value".to_string(), args[1].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_assign_target_var(name) -> assign target object
     env.define(
         "ast_assign_target_var".into(),
-        new_builtin("ast_assign_target_var", |args| {
+        new_compiled_function("ast_assign_target_var", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_assign_target_var expects 1 argument", "E004"));
             }
@@ -1067,13 +1087,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("kind".to_string(), str_val("variable"));
             map.insert("name".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_for_each(variable, iterable, body)
     env.define(
         "ast_for_each".into(),
-        new_builtin("ast_for_each", |args| {
+        new_compiled_function("ast_for_each", vec![], vec![], None, |args| {
             if args.len() != 3 {
                 return Err(RuntimeError::system_error("ast_for_each expects 3 arguments", "E004"));
             }
@@ -1083,13 +1103,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("iterable".to_string(), args[1].clone());
             map.insert("body".to_string(), args[2].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_throw(value)
     env.define(
         "ast_throw".into(),
-        new_builtin("ast_throw", |args| {
+        new_compiled_function("ast_throw", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_throw expects 1 argument", "E004"));
             }
@@ -1097,13 +1117,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("kind".to_string(), str_val("throw"));
             map.insert("value".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_try_catch(body, catches_list, finally_or_null)
     env.define(
         "ast_try_catch".into(),
-        new_builtin("ast_try_catch", |args| {
+        new_compiled_function("ast_try_catch", vec![], vec![], None, |args| {
             if args.len() != 3 {
                 return Err(RuntimeError::system_error("ast_try_catch expects 3 arguments", "E004"));
             }
@@ -1113,13 +1133,13 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("catches".to_string(), args[1].clone());
             map.insert("finally".to_string(), args[2].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 
     // ast_defer(body)
     env.define(
         "ast_defer".into(),
-        new_builtin("ast_defer", |args| {
+        new_compiled_function("ast_defer", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("ast_defer expects 1 argument", "E004"));
             }
@@ -1127,7 +1147,7 @@ pub fn register_ast_builtins(env: &crate::environment::Environment) {
             map.insert("kind".to_string(), str_val("defer"));
             map.insert("body".to_string(), args[0].clone());
             Ok(Value::Object(Gc::new(GcCell::new(map))))
-        }),
+        }, Some(false)),
     );
 }
 
@@ -1206,8 +1226,8 @@ mod tests {
         assert_eq!(program, restored);
     }
 
-    #[test]
-    fn test_execute_ast_built_from_values() {
+    #[tokio::test]
+    async fn test_execute_ast_built_from_values() {
         // Build an AST as values, convert to AST, execute it
         use crate::interpreter::IshVm;
 
@@ -1234,7 +1254,7 @@ mod tests {
         let restored = value_to_program(&value).unwrap();
 
         let mut vm = IshVm::new();
-        let result = vm.run(&restored).unwrap();
+        let result = vm.run(&restored).await.unwrap();
         assert_eq!(result, Value::Int(42));
     }
 }

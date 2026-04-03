@@ -62,6 +62,9 @@ pub enum IncompleteKind {
     BlockComment,
     GenericParams,
     GenericType,
+    // Concurrency (2)
+    AwaitNonCall,
+    SpawnNonCall,
 }
 
 impl IncompleteKind {
@@ -186,6 +189,15 @@ pub enum Expression {
     Lambda {
         params: Vec<Parameter>,
         body: Box<Statement>, // must be a Block
+        is_async: bool,
+    },
+    Await {
+        callee: Box<Expression>,
+        args: Vec<Expression>,
+    },
+    Spawn {
+        callee: Box<Expression>,
+        args: Vec<Expression>,
     },
     StringInterpolation(Vec<StringPart>),
     CommandSubstitution(Box<Statement>), // $(...) — wraps a ShellCommand or pipeline
@@ -227,11 +239,13 @@ pub enum Statement {
     While {
         condition: Expression,
         body: Box<Statement>, // must be a Block
+        yield_every: Option<Expression>,
     },
     ForEach {
         variable: String,
         iterable: Expression,
         body: Box<Statement>, // must be a Block
+        yield_every: Option<Expression>,
     },
     Return {
         value: Option<Expression>,
@@ -244,6 +258,7 @@ pub enum Statement {
         body: Box<Statement>, // must be a Block
         visibility: Option<Visibility>,
         type_params: Vec<String>, // generic type parameters: <T, U>
+        is_async: bool,
     },
     Throw {
         value: Expression,
@@ -300,6 +315,8 @@ pub enum Statement {
         subject: Expression,
         arms: Vec<MatchArm>,
     },
+    /// Explicit yield statement — yields control to other tasks
+    Yield,
     Incomplete {
         kind: IncompleteKind,
     },
@@ -460,6 +477,7 @@ impl Expression {
         Expression::Lambda {
             params,
             body: Box::new(body),
+            is_async: false,
         }
     }
 }
@@ -512,6 +530,7 @@ impl Statement {
         Statement::While {
             condition,
             body: Box::new(body),
+            yield_every: None,
         }
     }
     pub fn for_each(variable: impl Into<String>, iterable: Expression, body: Statement) -> Self {
@@ -519,6 +538,7 @@ impl Statement {
             variable: variable.into(),
             iterable,
             body: Box::new(body),
+            yield_every: None,
         }
     }
     pub fn ret(value: Option<Expression>) -> Self {
@@ -539,6 +559,7 @@ impl Statement {
             body: Box::new(body),
             visibility: None,
             type_params: vec![],
+            is_async: false,
         }
     }
     pub fn throw(value: Expression) -> Self {
@@ -635,7 +656,7 @@ impl Statement {
                     || then_block.has_incomplete_continuable()
                     || else_block.as_ref().map_or(false, |e| e.has_incomplete_continuable())
             }
-            Statement::While { condition, body } => {
+            Statement::While { condition, body, .. } => {
                 condition.has_incomplete_continuable() || body.has_incomplete_continuable()
             }
             Statement::ForEach { iterable, body, .. } => {
@@ -666,7 +687,8 @@ impl Statement {
             | Statement::Use { .. }
             | Statement::ModDecl { .. }
             | Statement::StandardDef { .. }
-            | Statement::EntryTypeDef { .. } => false,
+            | Statement::EntryTypeDef { .. }
+            | Statement::Yield => false,
         }
     }
 
@@ -682,7 +704,7 @@ impl Statement {
                     || then_block.has_any_incomplete()
                     || else_block.as_ref().map_or(false, |e| e.has_any_incomplete())
             }
-            Statement::While { condition, body } => {
+            Statement::While { condition, body, .. } => {
                 condition.has_any_incomplete() || body.has_any_incomplete()
             }
             Statement::ForEach { iterable, body, .. } => {
@@ -713,7 +735,8 @@ impl Statement {
             | Statement::Use { .. }
             | Statement::ModDecl { .. }
             | Statement::StandardDef { .. }
-            | Statement::EntryTypeDef { .. } => false,
+            | Statement::EntryTypeDef { .. }
+            | Statement::Yield => false,
         }
     }
 }
@@ -747,6 +770,9 @@ impl Expression {
                 _ => false,
             }),
             Expression::CommandSubstitution(cmd) => cmd.has_incomplete_continuable(),
+            Expression::Await { callee, args } | Expression::Spawn { callee, args } => {
+                callee.has_incomplete_continuable() || args.iter().any(|a| a.has_incomplete_continuable())
+            }
             _ => false,
         }
     }
@@ -779,6 +805,9 @@ impl Expression {
                 _ => false,
             }),
             Expression::CommandSubstitution(cmd) => cmd.has_any_incomplete(),
+            Expression::Await { callee, args } | Expression::Spawn { callee, args } => {
+                callee.has_any_incomplete() || args.iter().any(|a| a.has_any_incomplete())
+            }
             _ => false,
         }
     }

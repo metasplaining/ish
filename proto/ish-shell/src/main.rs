@@ -17,12 +17,14 @@ fn main() {
     if let Some(idx) = args.iter().position(|a| a == "-c") {
         // Inline execution: ish -c 'code'
         let code = args.get(idx + 1).expect("missing argument to -c");
-        repl::run_inline(code);
+        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        rt.block_on(repl::run_inline(code));
     } else if let Some(filename) = positional.first() {
         // File execution: ish script.ish
-        repl::run_file(filename);
+        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        rt.block_on(repl::run_file(filename));
     } else {
-        // Interactive REPL
+        // Interactive REPL (two-thread model — manages its own runtime)
         repl::run_interactive(no_history);
     }
 }

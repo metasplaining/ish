@@ -24,6 +24,7 @@ Authoritative specification of ish syntax and semantics. These documents use nor
 | [polymorphism.md](polymorphism.md) | Polymorphism strategies — none, enumerated, monomorphized, vtable, associative array | draft |
 | [syntax.md](syntax.md) | Formal syntax — comments, variables, control flow, functions, types, shell mode, parser | draft |
 | [errors.md](errors.md) | Errors — hierarchy, throw/catch/finally/defer, ledger integration, error catalog | draft |
+| [concurrency.md](concurrency.md) | Concurrency — cooperative multitasking, async/await, Tokio runtime, parallelism, streams, I/O, shell architecture | draft |
 
 ---
 

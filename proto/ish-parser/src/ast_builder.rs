@@ -46,6 +46,7 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, ParseError> {
         Rule::while_stmt => build_while_stmt(pair),
         Rule::for_stmt => build_for_stmt(pair),
         Rule::return_stmt => build_return_stmt(pair),
+        Rule::yield_stmt => build_yield_stmt(pair),
         Rule::throw_stmt => build_throw_stmt(pair),
         Rule::try_catch => build_try_catch(pair),
         Rule::with_block => build_with_block(pair),
@@ -177,6 +178,13 @@ fn build_fn_decl(pair: Pair<Rule>) -> Result<Statement, ParseError> {
         None
     };
 
+    let is_async = if inner.peek().map(|p| p.as_rule()) == Some(Rule::async_kw) {
+        inner.next();
+        true
+    } else {
+        false
+    };
+
     let name = inner.next().unwrap().as_str().to_string();
 
     let mut type_params = Vec::new();
@@ -211,6 +219,7 @@ fn build_fn_decl(pair: Pair<Rule>) -> Result<Statement, ParseError> {
         body: Box::new(body.unwrap()),
         visibility,
         type_params,
+        is_async,
     })
 }
 
@@ -286,11 +295,20 @@ fn build_if_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
 fn build_while_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
     let mut inner = pair.into_inner();
     let condition = build_expression(inner.next().unwrap())?;
-    let body = build_block(inner.next().unwrap())?;
+
+    let mut yield_every = None;
+    let next = inner.next().unwrap();
+    let body = if next.as_rule() == Rule::yield_every_clause {
+        yield_every = Some(build_expression(next.into_inner().next().unwrap())?);
+        build_block(inner.next().unwrap())?
+    } else {
+        build_block(next)?
+    };
 
     Ok(Statement::While {
         condition,
         body: Box::new(body),
+        yield_every,
     })
 }
 
@@ -298,18 +316,31 @@ fn build_for_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
     let mut inner = pair.into_inner();
     let variable = inner.next().unwrap().as_str().to_string();
     let iterable = build_expression(inner.next().unwrap())?;
-    let body = build_block(inner.next().unwrap())?;
+
+    let mut yield_every = None;
+    let next = inner.next().unwrap();
+    let body = if next.as_rule() == Rule::yield_every_clause {
+        yield_every = Some(build_expression(next.into_inner().next().unwrap())?);
+        build_block(inner.next().unwrap())?
+    } else {
+        build_block(next)?
+    };
 
     Ok(Statement::ForEach {
         variable,
         iterable,
         body: Box::new(body),
+        yield_every,
     })
 }
 
 fn build_return_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
     let value = pair.into_inner().next().map(|p| build_expression(p)).transpose()?;
     Ok(Statement::Return { value })
+}
+
+fn build_yield_stmt(_pair: Pair<Rule>) -> Result<Statement, ParseError> {
+    Ok(Statement::Yield)
 }
 
 fn build_throw_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
@@ -901,6 +932,13 @@ fn build_expr_inner(pair: Pair<Rule>) -> Result<Expression, ParseError> {
         }),
         Rule::unary => build_unary(pair),
         Rule::postfix => build_postfix(pair),
+        Rule::call_expr => {
+            let (callee, args) = build_call_expr(pair)?;
+            Ok(Expression::FunctionCall {
+                callee: Box::new(callee),
+                args,
+            })
+        }
         Rule::primary => build_primary(pair),
         _ => build_expression(pair),
     }
@@ -986,8 +1024,61 @@ fn build_unary(pair: Pair<Rule>) -> Result<Expression, ParseError> {
                 operand: Box::new(operand),
             })
         }
+        Rule::await_op => {
+            let next = inner.next().unwrap();
+            match next.as_rule() {
+                Rule::call_expr => {
+                    let (callee, args) = build_call_expr(next)?;
+                    Ok(Expression::Await {
+                        callee: Box::new(callee),
+                        args,
+                    })
+                }
+                _ => {
+                    // await on non-call → Incomplete node
+                    Ok(Expression::Incomplete {
+                        kind: IncompleteKind::AwaitNonCall,
+                    })
+                }
+            }
+        }
+        Rule::spawn_op => {
+            let next = inner.next().unwrap();
+            match next.as_rule() {
+                Rule::call_expr => {
+                    let (callee, args) = build_call_expr(next)?;
+                    Ok(Expression::Spawn {
+                        callee: Box::new(callee),
+                        args,
+                    })
+                }
+                _ => {
+                    // spawn on non-call → Incomplete node
+                    Ok(Expression::Incomplete {
+                        kind: IncompleteKind::SpawnNonCall,
+                    })
+                }
+            }
+        }
         _ => build_expr_inner(first),
     }
+}
+
+/// Build a call_expr pair (primary ~ call_args) into callee expression + arg list.
+fn build_call_expr(pair: Pair<Rule>) -> Result<(Expression, Vec<Expression>), ParseError> {
+    let mut inner = pair.into_inner();
+    let primary = inner.next().unwrap();
+    let callee = build_expr_inner(primary)?;
+    let call_args_pair = inner.next().unwrap();
+    let args = if let Some(arg_list) = call_args_pair.into_inner().next() {
+        arg_list
+            .into_inner()
+            .map(|a| build_expression(a))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        vec![]
+    };
+    Ok((callee, args))
 }
 
 fn build_postfix(pair: Pair<Rule>) -> Result<Expression, ParseError> {
@@ -1105,6 +1196,7 @@ fn build_lambda(pair: Pair<Rule>) -> Result<Expression, ParseError> {
                 return Ok(Expression::Lambda {
                     params,
                     body: Box::new(body),
+                    is_async: false,
                 });
             }
         }
@@ -1119,6 +1211,7 @@ fn build_lambda(pair: Pair<Rule>) -> Result<Expression, ParseError> {
     Ok(Expression::Lambda {
         params,
         body: Box::new(body),
+        is_async: false,
     })
 }
 

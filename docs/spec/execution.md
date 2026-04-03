@@ -53,6 +53,33 @@ All execution configurations support ish's error handling mechanisms (throw/try/
 
 ---
 
+## Concurrency Runtime
+
+All execution configurations integrate with a Tokio async runtime to support cooperative multitasking. The runtime model varies by configuration.
+
+### Thin Shell and Fat Shell (Interactive Mode)
+
+In interactive mode, the shell uses a **two-thread architecture**:
+
+- **Shell thread:** Runs Reedline (blocking `read_line()`), collects input, parses it via the ish parser, and submits the resulting `Program` AST to the main thread via a channel. The shell thread is responsible only for prompts and command line input.
+- **Main thread:** Runs the Tokio runtime with a `LocalSet`. The VM lives here. All `Value` objects, the `Environment`, and GC-managed state are confined to this thread. Spawned futures survive between shell submissions.
+
+All program output (expression results, `println`, errors, background task output) goes through stdout/stderr via Reedline's `ExternalPrinter` in interactive mode. The main thread sends only a completion signal (not display content) back to the shell thread.
+
+Shell command execution uses `tokio::process::Command` instead of `std::process::Command` to avoid blocking the `LocalSet` thread.
+
+### Non-Interactive Mode (File/Inline Execution)
+
+When ish is started with a file or inline code, there is no shell thread. The main thread parses the input, creates a Tokio runtime and `LocalSet`, runs the program to completion, and exits. Output goes directly to OS stdout/stderr.
+
+### Compiler and Executable
+
+The compiler configuration operates within the same Tokio runtime model. Generated executables include the Tokio runtime as part of their standard runtime dependencies.
+
+See [docs/spec/concurrency.md](concurrency.md) for the full concurrency model.
+
+---
+
 ## Open Questions
 
 Open questions for execution configurations. See also [docs/project/open-questions.md](../project/open-questions.md#execution-configurations) for a consolidated view.
@@ -94,5 +121,6 @@ Open questions for execution configurations. See also [docs/project/open-questio
 ## Referenced by
 
 - [docs/spec/INDEX.md](INDEX.md)
+- [docs/spec/concurrency.md](concurrency.md)
 - [docs/spec/modules.md](modules.md)
 - [GLOSSARY.md](../../GLOSSARY.md)

@@ -25,6 +25,7 @@ A guide for human developers learning ish. Starts simple and builds to advanced 
 | [modules.md](modules.md) | Module system for users | draft |
 | [error-handling.md](error-handling.md) | Errors, exceptions, result types | draft |
 | [assurance-levels.md](assurance-levels.md) | The assurance level continuum | draft |
+| [concurrency.md](concurrency.md) | Concurrency: async/await, futures, yield control | draft |
 
 ---
 

@@ -6,11 +6,24 @@ use std::rc::Rc;
 
 use crate::environment::Environment;
 use crate::error::RuntimeError;
-use crate::value::*;
+use crate::value::{self, *};
+
+/// Configuration for builtin output routing.
+#[derive(Clone, Default)]
+pub struct BuiltinConfig {
+    /// When set, println/print send output through this channel
+    /// instead of writing directly to stdout.
+    pub output_sender: Option<crossbeam::channel::Sender<String>>,
+}
 
 /// Register all built-in functions into the given environment.
 pub fn register_all(env: &Environment) {
-    register_io(env);
+    register_all_with_config(env, &BuiltinConfig::default());
+}
+
+/// Register all built-in functions with the given configuration.
+pub fn register_all_with_config(env: &Environment, config: &BuiltinConfig) {
+    register_io(env, config);
     register_strings(env);
     register_lists(env);
     register_objects(env);
@@ -38,49 +51,62 @@ fn register_ledger(env: &Environment) {
         let n2 = n.clone();
         env.define(
             n.clone(),
-            new_builtin(&n, move |_args| {
+            new_compiled_function(&n, vec![], vec![], None, move |_args| {
                 Err(RuntimeError::system_error(format!(
                     "{} must be intercepted by the interpreter",
                     n2
                 ), "E004"))
-            }),
+            }, Some(false)),
         );
     }
 }
 
 // ── I/O ─────────────────────────────────────────────────────────────────────
 
-fn register_io(env: &Environment) {
+fn register_io(env: &Environment, config: &BuiltinConfig) {
+    let print_sender = config.output_sender.clone();
     env.define(
         "print".into(),
-        new_builtin("print", |args| {
+        new_compiled_function("print", vec![], vec![], None, move |args| {
+            let mut output = String::new();
             for (i, arg) in args.iter().enumerate() {
                 if i > 0 {
-                    print!(" ");
+                    output.push(' ');
                 }
-                print!("{}", arg.to_display_string());
+                output.push_str(&arg.to_display_string());
+            }
+            if let Some(ref sender) = print_sender {
+                let _ = sender.send(output);
+            } else {
+                print!("{}", output);
             }
             Ok(Value::Null)
-        }),
+        }, Some(false)),
     );
 
+    let println_sender = config.output_sender.clone();
     env.define(
         "println".into(),
-        new_builtin("println", |args| {
+        new_compiled_function("println", vec![], vec![], None, move |args| {
+            let mut output = String::new();
             for (i, arg) in args.iter().enumerate() {
                 if i > 0 {
-                    print!(" ");
+                    output.push(' ');
                 }
-                print!("{}", arg.to_display_string());
+                output.push_str(&arg.to_display_string());
             }
-            println!();
+            if let Some(ref sender) = println_sender {
+                let _ = sender.send(output);
+            } else {
+                println!("{}", output);
+            }
             Ok(Value::Null)
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "read_file".into(),
-        new_builtin("read_file", |args| {
+        new_compiled_function("read_file", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("read_file expects 1 argument", "E003"));
             }
@@ -92,12 +118,12 @@ fn register_io(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("read_file expects a string path", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "write_file".into(),
-        new_builtin("write_file", |args| {
+        new_compiled_function("write_file", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("write_file expects 2 arguments", "E003"));
             }
@@ -110,7 +136,7 @@ fn register_io(env: &Environment) {
                 Err(RuntimeError::system_error(
                     "write_file expects (string path, string content)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 }
 
@@ -119,19 +145,19 @@ fn register_io(env: &Environment) {
 fn register_strings(env: &Environment) {
     env.define(
         "str_concat".into(),
-        new_builtin("str_concat", |args| {
+        new_compiled_function("str_concat", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("str_concat expects 2 arguments", "E003"));
             }
             let a = args[0].to_display_string();
             let b = args[1].to_display_string();
             Ok(Value::String(Rc::new(format!("{}{}", a, b))))
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "str_length".into(),
-        new_builtin("str_length", |args| {
+        new_compiled_function("str_length", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("str_length expects 1 argument", "E003"));
             }
@@ -140,12 +166,12 @@ fn register_strings(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("str_length expects a string", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "str_slice".into(),
-        new_builtin("str_slice", |args| {
+        new_compiled_function("str_slice", vec![], vec![], None, |args| {
             if args.len() != 3 {
                 return Err(RuntimeError::system_error("str_slice expects 3 arguments", "E003"));
             }
@@ -161,12 +187,12 @@ fn register_strings(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("str_slice expects (string, int, int)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "str_contains".into(),
-        new_builtin("str_contains", |args| {
+        new_compiled_function("str_contains", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("str_contains expects 2 arguments", "E003"));
             }
@@ -175,12 +201,12 @@ fn register_strings(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("str_contains expects (string, string)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "str_starts_with".into(),
-        new_builtin("str_starts_with", |args| {
+        new_compiled_function("str_starts_with", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("str_starts_with expects 2 arguments", "E003"));
             }
@@ -190,12 +216,12 @@ fn register_strings(env: &Environment) {
                 Err(RuntimeError::system_error(
                     "str_starts_with expects (string, string)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "str_replace".into(),
-        new_builtin("str_replace", |args| {
+        new_compiled_function("str_replace", vec![], vec![], None, |args| {
             if args.len() != 3 {
                 return Err(RuntimeError::system_error("str_replace expects 3 arguments", "E003"));
             }
@@ -209,12 +235,12 @@ fn register_strings(env: &Environment) {
                 Err(RuntimeError::system_error(
                     "str_replace expects (string, string, string)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "str_split".into(),
-        new_builtin("str_split", |args| {
+        new_compiled_function("str_split", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("str_split expects 2 arguments", "E003"));
             }
@@ -227,12 +253,12 @@ fn register_strings(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("str_split expects (string, string)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "str_to_upper".into(),
-        new_builtin("str_to_upper", |args| {
+        new_compiled_function("str_to_upper", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("str_to_upper expects 1 argument", "E003"));
             }
@@ -241,12 +267,12 @@ fn register_strings(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("str_to_upper expects a string", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "str_to_lower".into(),
-        new_builtin("str_to_lower", |args| {
+        new_compiled_function("str_to_lower", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("str_to_lower expects 1 argument", "E003"));
             }
@@ -255,12 +281,12 @@ fn register_strings(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("str_to_lower expects a string", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "str_char_at".into(),
-        new_builtin("str_char_at", |args| {
+        new_compiled_function("str_char_at", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("str_char_at expects 2 arguments", "E003"));
             }
@@ -274,12 +300,12 @@ fn register_strings(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("str_char_at expects (string, int)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "str_trim".into(),
-        new_builtin("str_trim", |args| {
+        new_compiled_function("str_trim", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("str_trim expects 1 argument", "E003"));
             }
@@ -288,7 +314,7 @@ fn register_strings(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("str_trim expects a string", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 }
 
@@ -297,7 +323,7 @@ fn register_strings(env: &Environment) {
 fn register_lists(env: &Environment) {
     env.define(
         "list_push".into(),
-        new_builtin("list_push", |args| {
+        new_compiled_function("list_push", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("list_push expects 2 arguments", "E003"));
             }
@@ -307,12 +333,12 @@ fn register_lists(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("list_push expects a list as first argument", "E003"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "list_pop".into(),
-        new_builtin("list_pop", |args| {
+        new_compiled_function("list_pop", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("list_pop expects 1 argument", "E003"));
             }
@@ -321,12 +347,12 @@ fn register_lists(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("list_pop expects a list", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "list_length".into(),
-        new_builtin("list_length", |args| {
+        new_compiled_function("list_length", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("list_length expects 1 argument", "E003"));
             }
@@ -335,12 +361,12 @@ fn register_lists(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("list_length expects a list", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "list_get".into(),
-        new_builtin("list_get", |args| {
+        new_compiled_function("list_get", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("list_get expects 2 arguments", "E003"));
             }
@@ -359,12 +385,12 @@ fn register_lists(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("list_get expects (list, int)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "list_set".into(),
-        new_builtin("list_set", |args| {
+        new_compiled_function("list_set", vec![], vec![], None, |args| {
             if args.len() != 3 {
                 return Err(RuntimeError::system_error("list_set expects 3 arguments", "E003"));
             }
@@ -384,12 +410,12 @@ fn register_lists(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("list_set expects (list, int, value)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "list_slice".into(),
-        new_builtin("list_slice", |args| {
+        new_compiled_function("list_slice", vec![], vec![], None, |args| {
             if args.len() != 3 {
                 return Err(RuntimeError::system_error("list_slice expects 3 arguments", "E003"));
             }
@@ -406,12 +432,12 @@ fn register_lists(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("list_slice expects (list, int, int)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "list_join".into(),
-        new_builtin("list_join", |args| {
+        new_compiled_function("list_join", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("list_join expects 2 arguments", "E003"));
             }
@@ -422,7 +448,7 @@ fn register_lists(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("list_join expects (list, string)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 }
 
@@ -431,7 +457,7 @@ fn register_lists(env: &Environment) {
 fn register_objects(env: &Environment) {
     env.define(
         "obj_get".into(),
-        new_builtin("obj_get", |args| {
+        new_compiled_function("obj_get", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("obj_get expects 2 arguments", "E003"));
             }
@@ -444,12 +470,12 @@ fn register_objects(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("obj_get expects (object, string)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "obj_set".into(),
-        new_builtin("obj_set", |args| {
+        new_compiled_function("obj_set", vec![], vec![], None, |args| {
             if args.len() != 3 {
                 return Err(RuntimeError::system_error("obj_set expects 3 arguments", "E003"));
             }
@@ -461,12 +487,12 @@ fn register_objects(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("obj_set expects (object, string, value)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "obj_has".into(),
-        new_builtin("obj_has", |args| {
+        new_compiled_function("obj_has", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("obj_has expects 2 arguments", "E003"));
             }
@@ -475,12 +501,12 @@ fn register_objects(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("obj_has expects (object, string)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "obj_keys".into(),
-        new_builtin("obj_keys", |args| {
+        new_compiled_function("obj_keys", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("obj_keys expects 1 argument", "E003"));
             }
@@ -494,12 +520,12 @@ fn register_objects(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("obj_keys expects an object", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "obj_values".into(),
-        new_builtin("obj_values", |args| {
+        new_compiled_function("obj_values", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("obj_values expects 1 argument", "E003"));
             }
@@ -509,12 +535,12 @@ fn register_objects(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("obj_values expects an object", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "obj_remove".into(),
-        new_builtin("obj_remove", |args| {
+        new_compiled_function("obj_remove", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("obj_remove expects 2 arguments", "E003"));
             }
@@ -527,7 +553,7 @@ fn register_objects(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("obj_remove expects (object, string)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 }
 
@@ -536,17 +562,17 @@ fn register_objects(env: &Environment) {
 fn register_types(env: &Environment) {
     env.define(
         "type_of".into(),
-        new_builtin("type_of", |args| {
+        new_compiled_function("type_of", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("type_of expects 1 argument", "E003"));
             }
             Ok(Value::String(Rc::new(args[0].type_name().to_string())))
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "is_type".into(),
-        new_builtin("is_type", |args| {
+        new_compiled_function("is_type", vec![], vec![], None, |args| {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("is_type expects 2 arguments", "E003"));
             }
@@ -555,7 +581,7 @@ fn register_types(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("is_type expects (value, string)", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 }
 
@@ -564,17 +590,17 @@ fn register_types(env: &Environment) {
 fn register_conversion(env: &Environment) {
     env.define(
         "to_string".into(),
-        new_builtin("to_string", |args| {
+        new_compiled_function("to_string", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("to_string expects 1 argument", "E003"));
             }
             Ok(Value::String(Rc::new(args[0].to_display_string())))
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "to_int".into(),
-        new_builtin("to_int", |args| {
+        new_compiled_function("to_int", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("to_int expects 1 argument", "E003"));
             }
@@ -594,12 +620,12 @@ fn register_conversion(env: &Environment) {
                     args[0].type_name()
                 ), "E004")),
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "to_float".into(),
-        new_builtin("to_float", |args| {
+        new_compiled_function("to_float", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("to_float expects 1 argument", "E003"));
             }
@@ -618,12 +644,12 @@ fn register_conversion(env: &Environment) {
                     args[0].type_name()
                 ), "E004")),
             }
-        }),
+        }, Some(false)),
     );
 
     env.define(
         "char".into(),
-        new_builtin("char", |args| {
+        new_compiled_function("char", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("char expects 1 argument", "E003"));
             }
@@ -656,7 +682,7 @@ fn register_conversion(env: &Environment) {
                     args[0].type_name()
                 ), "E004")),
             }
-        }),
+        }, Some(false)),
     );
 }
 
@@ -667,7 +693,7 @@ fn register_errors(env: &Environment) {
     // An error object is any object with a "message" String property.
     env.define(
         "is_error".into(),
-        new_builtin("is_error", |args| {
+        new_compiled_function("is_error", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("is_error expects 1 argument", "E003"));
             }
@@ -678,13 +704,13 @@ fn register_errors(env: &Environment) {
                 false
             };
             Ok(Value::Bool(result))
-        }),
+        }, Some(false)),
     );
 
     // error_message(error) -> extracts the message from an Error object
     env.define(
         "error_message".into(),
-        new_builtin("error_message", |args| {
+        new_compiled_function("error_message", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("error_message expects 1 argument", "E003"));
             }
@@ -694,13 +720,13 @@ fn register_errors(env: &Environment) {
             } else {
                 Err(RuntimeError::system_error("error_message expects an error object", "E004"))
             }
-        }),
+        }, Some(false)),
     );
 
     // error_code(error) -> extracts the code from a CodedError object (null if not CodedError)
     env.define(
         "error_code".into(),
-        new_builtin("error_code", |args| {
+        new_compiled_function("error_code", vec![], vec![], None, |args| {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("error_code expects 1 argument", "E003"));
             }
@@ -710,7 +736,7 @@ fn register_errors(env: &Environment) {
             } else {
                 Ok(Value::Null)
             }
-        }),
+        }, Some(false)),
     );
 }
 
@@ -723,8 +749,8 @@ mod tests {
     use ish_ast::builder::ProgramBuilder;
     use crate::interpreter::IshVm;
 
-    #[test]
-    fn test_type_of() {
+    #[tokio::test]
+    async fn test_type_of() {
         let program = ProgramBuilder::new()
             .expr_stmt(Expression::call(
                 Expression::ident("type_of"),
@@ -733,12 +759,12 @@ mod tests {
             .build();
 
         let mut vm = IshVm::new();
-        let result = vm.run(&program).unwrap();
+        let result = vm.run(&program).await.unwrap();
         assert_eq!(result, Value::String(Rc::new("int".into())));
     }
 
-    #[test]
-    fn test_str_length() {
+    #[tokio::test]
+    async fn test_str_length() {
         let program = ProgramBuilder::new()
             .expr_stmt(Expression::call(
                 Expression::ident("str_length"),
@@ -747,12 +773,12 @@ mod tests {
             .build();
 
         let mut vm = IshVm::new();
-        let result = vm.run(&program).unwrap();
+        let result = vm.run(&program).await.unwrap();
         assert_eq!(result, Value::Int(5));
     }
 
-    #[test]
-    fn test_list_operations() {
+    #[tokio::test]
+    async fn test_list_operations() {
         // let lst = [1, 2, 3];
         // list_push(lst, 4);
         // list_length(lst) -> 4
@@ -776,12 +802,12 @@ mod tests {
             .build();
 
         let mut vm = IshVm::new();
-        let result = vm.run(&program).unwrap();
+        let result = vm.run(&program).await.unwrap();
         assert_eq!(result, Value::Int(4));
     }
 
-    #[test]
-    fn test_obj_operations() {
+    #[tokio::test]
+    async fn test_obj_operations() {
         // let obj = { x: 10 };
         // obj_set(obj, "y", 20);
         // obj_get(obj, "y") -> 20
@@ -805,12 +831,12 @@ mod tests {
             .build();
 
         let mut vm = IshVm::new();
-        let result = vm.run(&program).unwrap();
+        let result = vm.run(&program).await.unwrap();
         assert_eq!(result, Value::Int(20));
     }
 
-    #[test]
-    fn test_string_manipulation() {
+    #[tokio::test]
+    async fn test_string_manipulation() {
         // str_concat("hello", " world")
         let program = ProgramBuilder::new()
             .expr_stmt(Expression::call(
@@ -820,12 +846,12 @@ mod tests {
             .build();
 
         let mut vm = IshVm::new();
-        let result = vm.run(&program).unwrap();
+        let result = vm.run(&program).await.unwrap();
         assert_eq!(result, Value::String(Rc::new("hello world".into())));
     }
 
-    #[test]
-    fn test_to_string_conversion() {
+    #[tokio::test]
+    async fn test_to_string_conversion() {
         let program = ProgramBuilder::new()
             .expr_stmt(Expression::call(
                 Expression::ident("to_string"),
@@ -834,7 +860,7 @@ mod tests {
             .build();
 
         let mut vm = IshVm::new();
-        let result = vm.run(&program).unwrap();
+        let result = vm.run(&program).await.unwrap();
         assert_eq!(result, Value::String(Rc::new("42".into())));
     }
 }

@@ -21,6 +21,7 @@ Playbooks and reference for AI agents writing ish code. Dense, structured, exhau
 | [playbook-mixed.md](playbook-mixed.md) | Working with mixed assurance levels | draft |
 | [patterns.md](patterns.md) | Common patterns and idioms | draft |
 | [antipatterns.md](antipatterns.md) | What NOT to do and why | draft |
+| [playbook-concurrency.md](playbook-concurrency.md) | How to write concurrent ish code | draft |
 
 ---
 

@@ -176,7 +176,7 @@ mod tests {
     fn test_lambda_expression_body() {
         let prog = parse("let double = (x) => x + x").unwrap();
         match &prog.statements[0] {
-            Statement::VariableDecl { value: Expression::Lambda { params, body }, .. } => {
+            Statement::VariableDecl { value: Expression::Lambda { params, body, .. }, .. } => {
                 assert_eq!(params.len(), 1);
                 assert_eq!(params[0].name, "x");
                 // Expression body should be wrapped in Block { [Return { Some(expr) }] }
@@ -199,7 +199,7 @@ mod tests {
     fn test_lambda_block_body() {
         let prog = parse("let inc = (x) => {\n    return x + 1\n}").unwrap();
         match &prog.statements[0] {
-            Statement::VariableDecl { value: Expression::Lambda { params, body }, .. } => {
+            Statement::VariableDecl { value: Expression::Lambda { params, body, .. }, .. } => {
                 assert_eq!(params.len(), 1);
                 assert_eq!(params[0].name, "x");
                 match body.as_ref() {

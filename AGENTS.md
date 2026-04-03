@@ -82,6 +82,8 @@ Load only the files you need for the task at hand.
 | Reviewing open questions | [docs/project/open-questions.md](docs/project/open-questions.md) |
 | Adding acceptance tests | [proto/ish-tests/lib/test_lib.sh](proto/ish-tests/lib/test_lib.sh), existing tests in `proto/ish-tests/` |
 | Understanding a design decision | [docs/project/decisions/INDEX.md](docs/project/decisions/INDEX.md) |
+| Working on concurrency | [docs/spec/concurrency.md](docs/spec/concurrency.md), [docs/architecture/vm.md](docs/architecture/vm.md), [docs/architecture/shell.md](docs/architecture/shell.md) |
+| Writing concurrent ish code | [docs/ai-guide/playbook-concurrency.md](docs/ai-guide/playbook-concurrency.md) |
 
 ---
 

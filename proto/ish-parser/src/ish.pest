@@ -34,6 +34,7 @@ statement = _{
     while_stmt |
     for_stmt |
     return_stmt |
+    yield_stmt |
     throw_stmt |
     try_catch |
     with_block |
@@ -49,7 +50,7 @@ statement = _{
 }
 
 // --- Annotations and Assurance Ledger ---
-annotated_stmt = { (annotation ~ NEWLINE*)+ ~ (fn_decl | let_stmt | type_alias | mod_stmt) }
+annotated_stmt = { (annotation ~ NEWLINE*)+ ~ (fn_decl | let_stmt | type_alias | mod_stmt | block | while_stmt | for_stmt) }
 annotation = { standard_annotation | entry_annotation }
 standard_annotation = { "@standard[" ~ annotation_args ~ "]" }
 unterminated_standard_annotation = { "@standard[" ~ annotation_args? ~ EOI }
@@ -81,8 +82,9 @@ assign_target = {
 }
 
 fn_decl = {
-    pub_modifier? ~ "fn" ~ identifier ~ generic_params? ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_annotation)? ~ block
+    pub_modifier? ~ async_kw? ~ "fn" ~ identifier ~ generic_params? ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_annotation)? ~ block
 }
+async_kw = { "async" }
 generic_params = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
 unterminated_generic_params = { "<" ~ (identifier ~ ("," ~ identifier)*)? ~ EOI }
 
@@ -96,11 +98,15 @@ if_stmt = {
     "if" ~ expression ~ block ~ (NEWLINE* ~ "else" ~ (if_stmt | block))?
 }
 
-while_stmt = { "while" ~ expression ~ block }
+while_stmt = { "while" ~ expression ~ yield_every_clause? ~ block }
 
-for_stmt = { "for" ~ identifier ~ "in" ~ expression ~ block }
+for_stmt = { "for" ~ identifier ~ "in" ~ expression ~ yield_every_clause? ~ block }
+
+yield_every_clause = { "yield" ~ "every" ~ expression }
 
 return_stmt = { "return" ~ expression? }
+
+yield_stmt = { "yield" ~ !("every") }
 
 // --- Error Handling ---
 throw_stmt = { "throw" ~ expression }
@@ -181,10 +187,19 @@ mod_op = { "%" }
 unary = {
     not_op ~ unary |
     neg_op ~ unary |
+    await_op ~ call_expr |
+    spawn_op ~ call_expr |
+    await_op ~ unary |
+    spawn_op ~ unary |
     postfix
 }
 not_op = { "not" }
 neg_op = { "-" }
+await_op = { "await" }
+spawn_op = { "spawn" }
+
+// A call_expr is primary followed by call_args (for await/spawn grammar restriction)
+call_expr = { primary ~ call_args }
 
 postfix = { primary ~ postfix_op* }
 postfix_op = _{
@@ -363,6 +378,7 @@ keyword = {
      "return" | "true" | "false" | "null" | "and" | "or" | "not" |
      "match" | "use" | "mod" | "pub" | "type" | "standard" | "entry" |
      "try" | "catch" | "finally" | "throw" | "with" | "defer" |
+     "async" | "await" | "spawn" | "yield" |
      "break" | "continue") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 identifier = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }

@@ -121,6 +121,18 @@ impl EntryTypeRegistry {
 
         // Closed — marks a type as closed to extra properties
         self.register(EntryType::new("Closed"));
+
+        // Complexity — concurrency complexity level (simple/complex)
+        self.register(
+            EntryType::new("Complexity")
+                .with_required("value", "String")
+        );
+
+        // Yielding — cooperative yielding behavior (yielding/unyielding)
+        self.register(
+            EntryType::new("Yielding")
+                .with_required("value", "String")
+        );
     }
 }
 

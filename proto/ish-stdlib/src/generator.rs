@@ -15,9 +15,9 @@ use ish_ast::builder::ProgramBuilder;
 use ish_vm::interpreter::IshVm;
 
 /// Register the generator functions into the VM's global environment.
-pub fn register_generator(vm: &mut IshVm) {
+pub async fn register_generator(vm: &mut IshVm) {
     let generator_program = build_generator();
-    vm.run(&generator_program).unwrap();
+    vm.run(&generator_program).await.unwrap();
 }
 
 /// Build the Rust generator as an ish program (AST).
@@ -452,15 +452,15 @@ mod tests {
     use ish_vm::value::Value;
     use ish_vm::reflection::program_to_value;
 
-    fn make_vm() -> IshVm {
+    async fn make_vm() -> IshVm {
         let mut vm = IshVm::new();
-        crate::load_all(&mut vm);
+        crate::load_all(&mut vm).await;
         vm
     }
 
-    #[test]
-    fn test_generate_simple_add_function() {
-        let mut vm = make_vm();
+    #[tokio::test]
+    async fn test_generate_simple_add_function() {
+        let mut vm = make_vm().await;
 
         // Build: fn add(a, b) { return a + b; }
         let test_program = ProgramBuilder::new()
@@ -493,7 +493,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&gen_prog).unwrap();
+        let result = vm.run(&gen_prog).await.unwrap();
         if let Value::String(s) = &result {
             let code = s.as_ref();
             assert!(code.contains("fn add(a: i64, b: i64) -> i64"), "got: {}", code);
@@ -503,9 +503,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_generate_factorial() {
-        let mut vm = make_vm();
+    #[tokio::test]
+    async fn test_generate_factorial() {
+        let mut vm = make_vm().await;
 
         let test_program = ProgramBuilder::new()
             .function("factorial", &["n"], |b| {
@@ -546,7 +546,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&gen_prog).unwrap();
+        let result = vm.run(&gen_prog).await.unwrap();
         if let Value::String(s) = &result {
             let code = s.as_ref();
             assert!(code.contains("fn factorial(n: i64) -> i64"), "got: {}", code);
@@ -558,9 +558,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_generate_program_with_multiple_functions() {
-        let mut vm = make_vm();
+    #[tokio::test]
+    async fn test_generate_program_with_multiple_functions() {
+        let mut vm = make_vm().await;
 
         let test_program = ProgramBuilder::new()
             .function("add", &["a", "b"], |b| {
@@ -582,7 +582,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&gen_prog).unwrap();
+        let result = vm.run(&gen_prog).await.unwrap();
         if let Value::String(s) = &result {
             let code = s.as_ref();
             assert!(code.contains("fn add("), "got: {}", code);

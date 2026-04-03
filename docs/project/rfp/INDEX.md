@@ -29,6 +29,8 @@ Cleaned-up prompt files used as input to the `/propose` skill. Each RFP preserve
 | 2026-03-19 | Types, Errors, and Assurance Ledger — Consistency Audit | [types-errors-assurance-consistency.md](types-errors-assurance-consistency.md) |
 | 2026-03-19 | Rename /plan Skill to Avoid Copilot Builtin Conflict | [rename-plan-skill.md](rename-plan-skill.md) |
 | 2026-03-20 | Implementation Audit — Types, Errors, and Assurance Ledger | [implementation-audit-types-errors-ledger.md](implementation-audit-types-errors-ledger.md) |
+| 2026-03-23 | Concurrency | [concurrency.md](concurrency.md) |
+| 2026-04-01 | Concurrency Correctness Fixes | [concurrency-correctness.md](concurrency-correctness.md) |
 
 ---
 

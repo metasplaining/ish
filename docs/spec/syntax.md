@@ -334,6 +334,88 @@ See [docs/user-guide/error-handling.md](../user-guide/error-handling.md) for ful
 
 ---
 
+## Concurrency
+
+### Async Functions
+
+Functions are declared async with the `async` keyword before `fn`. At low assurance, async declaration is optional — the runtime infers it.
+
+```ish
+// Explicit async function
+async fn fetch_data(url: String) -> String {
+    let response = await http.get(url)
+    return response.body
+}
+
+// At low assurance, async keyword is optional
+fn fetch_data(url) {
+    let response = http.get(url)    // implicitly awaited
+    return response.body
+}
+```
+
+### Await
+
+The `await` keyword suspends the caller until the awaited future resolves. `await` syntactically requires a function call — `await expr` where `expr` is not a call is a parse error (produces an `Incomplete` node). At low assurance, `await` is implicit when calling functions that return futures (implied await).
+
+```ish
+let result = await some_async_function()
+```
+
+### Spawn
+
+The `spawn` keyword starts an async operation and returns a `Future<T>` immediately without suspending the caller. Like `await`, `spawn` syntactically requires a function call.
+
+```ish
+let future = spawn do_something()
+// ... do other work ...
+let result = await future
+```
+
+### Yield
+
+The `yield` keyword explicitly gives up control to the Tokio scheduler.
+
+```ish
+yield    // explicit cooperative yield point
+```
+
+#### `yield every` (Loop Syntax)
+
+Statement-count-based yielding for loops (available at higher assurance levels):
+
+```ish
+for item in items yield every 500 {
+    process(item)
+}
+```
+
+#### Yield Budget Annotation
+
+Custom time-based yield threshold:
+
+```ish
+@[yield_budget(500us)]
+for item in items {
+    process(item)
+}
+```
+
+#### Unyielding Annotation
+
+Suppress yielding for a block:
+
+```ish
+@[unyielding]
+for item in items {
+    process(item)
+}
+```
+
+See [docs/spec/concurrency.md](concurrency.md) for full concurrency semantics.
+
+---
+
 ## Type Declaration Syntax
 
 ```ish
@@ -510,5 +592,6 @@ The grammar is structured in layers: lexer rules (keywords, operators, literals)
 ## Referenced by
 
 - [docs/spec/INDEX.md](INDEX.md)
+- [docs/spec/concurrency.md](concurrency.md)
 - [docs/project/proposals/language-syntax.md](../project/proposals/language-syntax.md)
 - [docs/user-guide/language-basics.md](../user-guide/language-basics.md)

@@ -35,6 +35,9 @@ The language is being designed iteratively. A Rust prototype explores key ideas.
 - [x] Proposal process improvements (three-document lifecycle, six skills, authority order)
 - [x] Error handling design (design complete; implementation pending entry-based error model)
 - [x] Types, errors, and assurance ledger consistency
+- [x] Concurrency design (cooperative multitasking, async/await, Tokio runtime, shell architecture)
+- [x] Concurrency prototype (async/await/spawn/yield, Tokio LocalSet, two-thread shell, yield budget, ledger integration)
+- [x] Concurrency correctness fixes (FutureRef equality, grammar-level await/spawn, compiled functions)
 
 ### In Progress
 

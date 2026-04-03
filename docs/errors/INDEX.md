@@ -33,6 +33,9 @@ Domain types are structural ish types (not entry types) defined in [errors.md](.
 | E008 | `FileError` | File I/O error — file read or write failed | `builtins.rs` (read_file, write_file) |
 | E009 | `TypeError` | Null unwrap — attempted to unwrap null with `?` operator | `interpreter.rs` (unwrap expression) |
 | E010 | `CodedError` | Shell command error — external command execution failed | `interpreter.rs` (shell command execution) |
+| E011 | `ConcurrencyError` | Concurrency error — cancelled task, panicked task, assurance discrepancy, already-awaited future | `interpreter.rs` (await, spawn, audits) |
+| E012 | `TypeError` | Await type mismatch — `await` applied to a call to an explicitly unyielding function | `interpreter.rs` (Expression::Await) |
+| E013 | `ConcurrencyError` | Spawn type mismatch — `spawn` applied to a call to an explicitly unyielding function | `interpreter.rs` (Expression::Spawn) |
 
 ---
 

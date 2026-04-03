@@ -3,8 +3,8 @@ title: Architecture Overview
 category: architecture
 audience: [all]
 status: draft
-last-verified: 2026-03-10
-depends-on: [docs/spec/execution.md, docs/spec/modules.md]
+last-verified: 2026-03-31
+depends-on: [docs/spec/execution.md, docs/spec/modules.md, docs/spec/concurrency.md]
 ---
 
 # Architecture Overview
@@ -18,7 +18,7 @@ High-level architecture of the ish prototype language processor.
 ```
 ish-shell (binary)
 ├── ish-ast
-├── ish-vm ──────── ish-ast, gc, serde_json
+├── ish-vm ──────── ish-ast, gc, serde_json, tokio
 ├── ish-stdlib ──── ish-ast, ish-vm
 └── ish-codegen ─── ish-ast, ish-vm, ish-runtime, libloading, tempfile
 
@@ -28,6 +28,18 @@ ish-runtime (standalone — no ish-* dependencies)
 ```
 
 `ish-runtime` is intentionally dependency-free (relative to other ish crates) so that compiled `.so` files can link against it without pulling in the full interpreter.
+
+---
+
+## Concurrency Runtime
+
+The prototype uses Tokio for asynchronous execution:
+
+- **ish-vm** depends on `tokio` and runs all user code inside a `LocalSet` with `spawn_local`. This keeps values `!Send`-safe while enabling cooperative multitasking.
+- **ish-shell** in interactive mode uses a two-thread architecture: a shell thread (Reedline, parser) and a main thread (Tokio `LocalSet`, VM). See [shell.md](shell.md) for details.
+- **Parallel tasks** use `tokio::spawn` on the multi-threaded runtime, restricted to Rust-level parallel shims that cannot access GC-managed values.
+
+The interpreter's `eval` function is `async`, and yield budget checks insert `tokio::task::yield_now().await` at yield-eligible points. See [docs/spec/concurrency.md](../spec/concurrency.md) for the full model.
 
 ---
 
@@ -117,3 +129,4 @@ proto/
 
 - [docs/architecture/INDEX.md](INDEX.md)
 - [docs/INDEX.md](../INDEX.md)
+- [docs/spec/concurrency.md](../spec/concurrency.md)

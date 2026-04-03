@@ -88,6 +88,25 @@ A dynamically linked package exposes two entry points:
 1. **Index function.** The module loader calls this to obtain metadata about all public symbols in the library, including function signatures.
 2. **Shim function.** Accepts a symbol name, a value object, and a parent shim, and returns a value object. The shim resolves the symbol to a function in the library, marshals the value object into the expected parameters, calls the function, and marshals the return value back into a value object. The parent shim allows library functions to call back into the ish shell.
 
+#### Parallel Shim Variant
+
+A **parallel shim** extends the dynamic linking interface for functions that require true multi-threaded execution. A parallel shim has the same inputs as a regular shim but returns a `Future<Value>` instead of a `Value`:
+
+```
+Regular shim:  (symbol, value, parent_shim) -> Value
+Parallel shim: (symbol, value, parent_shim) -> Future<Value>
+```
+
+When ish code calls a function exposed via a parallel shim:
+1. The runtime marshals ish values into the shim's parameter format.
+2. The parallel shim spawns a Tokio task (via `tokio::spawn`) on the thread pool and returns a `Future`.
+3. The ish code awaits (or spawns) the future from within the `LocalSet`.
+4. When the parallel task completes, its result is marshaled back into an ish value.
+
+Parallel shims require all data crossing the thread boundary to be `Send`. The shim is responsible for marshaling ish values to `Send`-safe Rust types. Functions from parallel shims carry a `Parallel` entry in the assurance ledger.
+
+See [docs/spec/concurrency.md](concurrency.md) for the full parallelism model.
+
 ---
 
 ## Package Distribution
@@ -176,5 +195,6 @@ Open questions for the module system. See also [docs/project/open-questions.md](
 ## Referenced by
 
 - [docs/spec/INDEX.md](INDEX.md)
+- [docs/spec/concurrency.md](concurrency.md)
 - [docs/architecture/overview.md](../architecture/overview.md)
 - [docs/user-guide/modules.md](../user-guide/modules.md)

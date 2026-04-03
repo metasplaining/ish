@@ -10,8 +10,8 @@ pub mod stdlib;
 use ish_vm::interpreter::IshVm;
 
 /// Load all stdlib functions, analyzer, and generator into the VM.
-pub fn load_all(vm: &mut IshVm) {
-    stdlib::register_stdlib(vm);
-    analyzer::register_analyzer(vm);
-    generator::register_generator(vm);
+pub async fn load_all(vm: &mut IshVm) {
+    stdlib::register_stdlib(vm).await;
+    analyzer::register_analyzer(vm).await;
+    generator::register_generator(vm).await;
 }

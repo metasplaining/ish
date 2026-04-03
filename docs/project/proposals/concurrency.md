@@ -1,0 +1,883 @@
+---
+title: "Proposal: Concurrency"
+category: proposal
+audience: [all]
+status: accepted
+last-verified: 2026-03-29
+depends-on: [docs/project/rfp/concurrency.md, docs/spec/assurance-ledger.md, docs/spec/execution.md, docs/spec/memory.md, docs/spec/types.md]
+---
+
+# Proposal: Concurrency
+
+*Generated from [concurrency.md](../rfp/concurrency.md) on 2026-03-23. Revised 2026-03-29.*
+
+---
+
+## Decision Register
+
+All decisions made during design, consolidated here as the authoritative reference.
+
+| # | Decision | Outcome |
+|---|----------|---------|
+| 1 | Duration entry taxonomy (simple/complex vs. orthogonal axes) | **Three orthogonal dimensions:** Complexity (simple/complex), Yielding (yielding/unyielding), Blocking (blocking/non-blocking — eliminated from ish) |
+| 2 | Terminology: use standard async/await terms or ish-specific terms | **Standard keywords:** `async`, `await`, `spawn`, `yield`, with `Future` type. **Entry types:** `Yielding` and `Complexity` |
+| 3 | Default behavior when calling a yielding function without annotation | **Default to await.** Low-assurance ish treats all code as simple/unyielding by default and upgrades to yielding automatically; the `async`, `await`, and `yield` keywords are not required at low assurance |
+| 4 | Cooperative multitasking model | **Standard async/await (Alternative A).** Structured concurrency (`concurrent` block) rejected due to scoping problems |
+| 5 | Yield mechanism | **Hybrid.** Low assurance: time-based yielding at documented yield points. High assurance: fine-grained control of both yield points and yield criteria (time-based and statement-count-based) |
+| 6 | Parallelism and runtime model | **Tokio-based.** Concurrency via `LocalSet`/`spawn_local` (single-thread, `!Send` safe). Parallelism via `tokio::spawn` (multi-thread, `Send` required). No user-defined parallel functions in ish; parallel functions are standard library only, implemented in Rust with parallel shims. All I/O is Tokio async. Blocking category eliminated |
+| 7 | Data sharing model for parallel code | **N/A** — superseded by decision 6; `LocalSet` tasks share memory freely; parallel tasks are Rust-only |
+| 8 | Interaction between concurrency and memory management models | **N/A** — superseded by decision 6; GC is single-threaded on the `LocalSet` thread |
+| 9 | How blocking is defined and detected | **Eliminated.** No blocking functions in ish. Standard library wraps all I/O as async via Tokio. If a Rust library needs synchronous I/O, it is exposed as a parallel function, not a blocking one |
+| 10 | Dropped future discrepancy | **Yes.** Add an assurance feature that raises a discrepancy when a `Future` is dropped without being awaited |
+| 11 | Concurrent for — syntax or library function | **Library function.** Error propagation requires running all tasks to completion and returning a list of results (which may include errors), which would be surprising for loop syntax but natural for a function |
+| 12 | Does calling `spawn` make the caller yielding? | **No.** `spawn` returns a `Future` immediately without suspending. Only `await` and `yield` make the caller yielding |
+| 13 | Parallel collection functions with ish closures | **Eliminated.** No parallel standard library functions accept ish closures. Accepting closures would pull parallelism complexity back into the language |
+| 14 | Parameter marshaling and streams | **Zero-copy byte buffers** via immutable/mutable Value discrimination. **Stream type** required for efficient cross-thread data transfer. Per-function marshaling strategy for complex types (copy-in/copy-out in shim) |
+| 15 | Entry terminology | **`Yielding`/`Complexity`** — rename `Duration` to `Complexity`; keep `Yielding` |
+| 16 | `future_drop` feature levels | **Enabled/disabled only.** Discrepancies already produce runtime errors in the assurance ledger; there is no separate "discrepancy without error" state. The `future_drop` feature is either disabled (streamlined) or enabled (cautious, rigorous) |
+| 17 | `concurrent_map` signature and error handling | **Inline results.** `async fn concurrent_map<T,U>(items: [T], fn map_fn(T) -> U) -> U[]`. Results are positionally correlated with input items. If `map_fn` can return errors, `U` is a union type (e.g. `ValidResult\|Error`), and the returned array contains the result or error at each position |
+| 18 | Stream implementation model | **Unified with specialization (Alternative C).** A single `Stream<T>` abstraction with specialized implementations: `Stream<ByteBuffer>` uses efficient byte-oriented I/O, `Stream<T>` for other types uses channels. I/O standard library wraps Tokio ecosystem types directly, does not spawn its own tasks |
+| 19 | I/O interface model | **Core abstractions:** `Reader`, `Writer`, `Stream<T>`, `StreamWriter<T>`, `ByteBuffer`. Streams are composable. I/O types (stdin, stdout, File, TcpSocket, UdpSocket) have convenience methods for both whole-resource operations (e.g. read entire file) and opening streams directly. `ByteBuffer` is a single ish type abstracting over Rust's `&[u8]`/`Bytes`/`BytesMut`; mutability is expressed via the `Mutable` ledger entry. A minimal I/O library subset is defined for concurrent implementation |
+| 20 | I/O implementation scope | **`println` only.** All I/O types and functions are out of scope for the concurrent implementation. The full I/O library design is preserved in the proposal as future work. Only `println` needs to be implemented with concurrency; it becomes async internally but its ish-level interface and behavior are unchanged |
+| 21 | Shell/VM threading model | **Two threads in interactive mode.** Shell thread runs Reedline, collects input, parses it, and submits AST to the main thread as a task. Main thread runs the Tokio `LocalSet` with the VM, always available to process tasks. Spawned futures survive after the submitting task completes. In non-interactive mode (file/inline), there is no shell thread — just the main/VM thread |
+| 22 | Parser placement | **Parser runs on the shell thread.** The parser is stateless and the AST (`Program`) is `Send`, so parsed programs cross the thread boundary safely. This keeps the shell thread responsible for input collection, validation, and parsing, while the main thread is dedicated to execution. In non-interactive mode, parsing happens on the main thread before execution begins |
+| 23 | Output routing and stdout coordination | **Reedline ExternalPrinter.** The shell thread is responsible only for prompts and command line input. All program output — expression results, `println`, errors, background task output — goes through stdout/stderr, never through a result channel to the shell thread. In interactive mode, stdout writes use Reedline's `ExternalPrinter` so output does not corrupt the prompt. Code that writes to stdout must auto-detect whether the VM is in interactive (shell) mode: if so, write through the `ExternalPrinter`; if not, write directly to OS stdout. The main thread sends only a completion signal (not display content) back to the shell thread |
+
+---
+
+## Questions and Answers
+
+### Q: How many duration entries can a block have, and are they mutually exclusive?
+
+**Decided.** There are two orthogonal dimensions in the ish language (Decision 1, as refined by Decision 9 and 15):
+
+- **Complexity:** `simple` (completes quickly) vs. `complex` (may take a long time)
+- **Yielding:** `yielding` (suspends execution cooperatively) vs. `unyielding` (never suspends)
+
+Blocking is eliminated from the ish language (Decision 9) and only relevant at the Rust shim boundary.
+
+A block can be:
+- `simple + unyielding` — quick computation
+- `complex + unyielding` — long computation without yields (a discrepancy when `guaranteed_yield` is enabled)
+- `simple + yielding` — quick but suspends (e.g., a fast async I/O call)
+- `complex + yielding` — long async operation with yield points
+
+Entries within the same dimension are mutually exclusive. Entries across dimensions are independent.
+
+### Q: What is the correct terminology, consistent with other languages that support async/await?
+
+**Decided.** (Decisions 2, 15)
+
+**Keywords** follow industry standard:
+
+| Concept | ish keyword/type | Notes |
+|---------|-----------------|-------|
+| Async function declaration | `async fn` | Declares a function that can yield |
+| Suspend until complete | `await` | Suspends caller until the awaited future resolves |
+| Start without waiting | `spawn` | Starts an async operation, returns a `Future` |
+| Future handle | `Future<T>` | A value representing an eventual result of type `T` |
+| Cooperative suspension | `yield` | The point at which a function gives up control |
+
+**Ledger entry types** describe runtime properties of code, not syntactic declarations:
+
+| Entry type | Describes |
+|------------|-----------|
+| `Yielding` | Whether a block can suspend execution. Distinct from the `async` keyword — a function can be `yielding` without being declared `async` (at low assurance, the runtime infers it) |
+| `Complexity` | Whether a block completes quickly (`simple`) or may take a long time (`complex`). Determines whether yield-point insertion is needed |
+
+This parallels how `Mutable` is an entry type while `mut` is the keyword.
+
+### Q: What does "quickly" mean for the `simple` entry?
+
+The RFP suggests "less than a millisecond or fewer than 100,000 CPU cycles." In the Tokio model (Decision 6), `simple` tells the runtime that no yield points are needed within this block. `complex` tells the runtime that yield points should be inserted (either automatically via time-based budgets, or explicitly via developer annotation). The exact threshold is a runtime configuration, not a language-level guarantee.
+
+---
+
+## Feature 1: Cooperative Multitasking
+
+### Design (Decisions 1–4, 6, 10–12, 15–17)
+
+ish uses standard `async`/`await` semantics, implemented on top of a Tokio runtime with `LocalSet` for cooperative scheduling.
+
+#### Runtime Architecture
+
+All ish user code runs inside a Tokio `LocalSet` on the main thread. Tasks are spawned with `spawn_local`, which does not require the `Send` trait. This means:
+
+- GC-managed heap objects can be shared freely between concurrent tasks.
+- No synchronization overhead for memory access between ish tasks.
+- The single-threaded cooperative model avoids data races by construction.
+- The existing tree-walking interpreter can be adapted to yield at `.await` points without fundamental architectural changes.
+
+#### Low-Assurance Behavior (Decision 3)
+
+At low assurance (`streamlined` standard), concurrency is transparent:
+
+- All code is treated as `simple + unyielding` by default.
+- When an ish function calls an async standard library function (e.g., file I/O), the call implicitly awaits — the developer does not need to write `await`.
+- The runtime automatically upgrades the calling function to `yielding` at execution time.
+- The `async`, `await`, `spawn`, and `yield` keywords are available but not required.
+
+This means a developer at low assurance can write:
+
+```ish
+let data = file.read("input.txt")
+let result = process(data)
+file.write("output.txt", result)
+```
+
+The `file.read` and `file.write` calls are async under the hood (Tokio I/O), but the developer sees synchronous-looking code. The runtime awaits each call automatically.
+
+#### High-Assurance Behavior
+
+At higher assurance levels (`cautious`, `rigorous`), the developer must be explicit:
+
+```ish
+// Explicit async function declaration
+async fn fetch_and_process(path: String) -> Result<String> {
+    let data = await file.read(path)
+    let result = process(data)
+    return result
+}
+
+// Caller must explicitly await or spawn
+let result = await fetch_and_process("input.txt")
+
+// Or spawn to get a future
+let future = spawn fetch_and_process("input.txt")
+// ... do other work ...
+let result = await future
+```
+
+#### Assurance Features
+
+| Feature | `streamlined` | `cautious` | `rigorous` |
+|---------|--------------|------------|------------|
+| `async_annotation` | optional (auto-inferred) | required | required |
+| `await_required` | optional (default: await) | required | required |
+| `guaranteed_yield` | disabled | enabled | enabled |
+| `future_drop` | disabled | enabled | enabled |
+
+#### Cancellation (Decisions 10, 16)
+
+When a `Future` value is dropped (goes out of scope without being awaited), the underlying `spawn_local` task is cancelled. Tokio supports this via `JoinHandle::abort()`. Cancellation semantics:
+
+- A cancelled task stops at its next `.await` point.
+- `defer` blocks in the cancelled task still execute (cleanup is guaranteed).
+- `with` block resources in the cancelled task are still closed.
+- Awaiting a cancelled future returns a cancellation error, catchable via `try`/`catch`.
+
+The `future_drop` assurance feature controls whether dropping a future is flagged. Since discrepancies produce runtime errors in the assurance ledger (there is no "discrepancy without error" mode), the feature is a simple enabled/disabled toggle:
+
+| `future_drop` state | Behavior |
+|---------------------|----------|
+| disabled (`streamlined`) | Dropped futures are silently cancelled. No discrepancy. |
+| enabled (`cautious`, `rigorous`) | Dropping a future without awaiting it is a discrepancy. The developer must explicitly cancel or await. |
+
+This catches resource leaks from forgotten futures at higher assurance levels.
+
+#### Error Propagation
+
+Errors propagate naturally through `await`:
+
+- If an awaited function throws, the error propagates through the caller's `try`/`catch` chain, identical to synchronous error propagation.
+- If a spawned function throws, the error is captured in the `Future`. When the future is awaited, the error is re-thrown at the await site.
+- If a `Future` is dropped without being awaited and the task threw an error, the error is logged (not silently swallowed).
+
+#### Concurrent Iteration (Decisions 11, 17)
+
+Concurrent iteration is provided as a standard library function, not as syntax. A `concurrent for` loop would need to run all tasks to completion and return a list of results — behavior that would be surprising for loop syntax but natural for a function call.
+
+The `concurrent_map` function returns an array positionally correlated with the input. Each element contains either a successful result or an error from the corresponding input item:
+
+```ish
+// Signature:
+// async fn concurrent_map<T, U>(items: [T], fn map_fn(T) -> U) -> U[]
+
+// Basic usage — all results at the same index as inputs
+let results = concurrent_map(items, (item) => {
+    transform(item)
+})
+// results[i] corresponds to items[i]
+
+// When map_fn can throw, U is a union of the result and Error:
+let results = concurrent_map(urls, (url) => {
+    http.get(url)  // may throw
+})
+// results[i] is either a Response or an Error, corresponding to urls[i]
+for i in 0..results.len() {
+    match results[i] {
+        response: Response => handle_success(urls[i], response)
+        err: Error => handle_failure(urls[i], err)
+    }
+}
+```
+
+The function spawns each iteration as a `spawn_local` task on the `LocalSet`, waits for all to complete, and collects results. Since all tasks run on the same `LocalSet` thread, closures can freely access the enclosing scope's GC-managed data.
+
+There is no separate `(results, errors)` tuple. Errors are returned inline in the results array. This preserves the positional correspondence between inputs and outputs, letting the caller know exactly which input produced which result or error.
+
+`concurrent_for_each` is the side-effect variant:
+
+```ish
+// Signature:
+// async fn concurrent_for_each<T>(items: [T], fn each_fn(T) -> Void) -> (Void|Error)[]
+
+let results = concurrent_for_each(items, (item) => {
+    process(item)
+})
+// results[i] is Void (success) or Error, corresponding to items[i]
+```
+
+#### Complexity and Yielding Entries as Ledger Entry Types (Decision 15)
+
+The two dimensions are modeled as ledger entry types:
+
+```ish
+entry type Complexity {
+    applies_to: [function, block],
+    values: [simple, complex],
+}
+
+entry type Yielding {
+    applies_to: [function, block],
+    values: [yielding, unyielding],
+}
+```
+
+Inference rules (Decision 12):
+- A function calling any `complex` function is itself `complex`.
+- A function containing an `await` or `yield` expression is `yielding`.
+- A function calling any `yielding` function (with `await`) is itself `yielding`.
+- Calling `spawn` does **not** make the caller `yielding` — `spawn` returns a `Future` immediately without suspending.
+- A function that calls `spawn` is not `yielding` merely from the spawn. However, if it later awaits the resulting future, that `await` makes it `yielding`.
+
+---
+
+## Feature 2: Guaranteed Yield Mechanism (Decision 5)
+
+### Design
+
+The yield mechanism is a hybrid: time-based yielding by default, with explicit overrides available at higher assurance levels.
+
+#### Time-Based Yielding (Low Assurance)
+
+The Tokio runtime budget system provides a natural foundation. Tokio already tracks "coop budget" — a counter that decrements on each poll, forcing a yield when exhausted. ish extends this concept to the language level:
+
+- The runtime maintains a yield budget (configurable time quantum, default ~1ms).
+- At each **yield-eligible point** — loop back-edges and function call sites — the runtime checks whether the budget is exhausted.
+- If exhausted, the runtime inserts a `tokio::task::yield_now().await`, returning control to the Tokio scheduler.
+- The budget is reset after each yield.
+
+The **documented yield points** are:
+1. Every loop back-edge (`for`, `while`)
+2. Every function call (before the call)
+3. Every explicit `yield` statement
+
+At low assurance, only the time-based mechanism is active. The developer does not need to think about yielding.
+
+#### Explicit Yield Control (High Assurance)
+
+At higher assurance levels, the developer can control yield behavior precisely:
+
+```ish
+// Time-based — runtime handles it (default at all levels)
+for item in items {
+    process(item)
+}
+
+// Statement-count-based — yield every N iterations
+for item in items yield every 500 {
+    process(item)
+}
+
+// Time-based with custom threshold
+@[yield_budget(500us)]
+for item in items {
+    process(item)
+}
+
+// Suppress yielding (marks the block as unyielding)
+@[unyielding]
+for item in items {
+    process(item)
+}
+```
+
+#### Guaranteed Yield as a Discrepancy
+
+When the `guaranteed_yield` feature is enabled (`cautious` and `rigorous` standards), a `complex + unyielding` block is a discrepancy. The developer must either:
+- Accept automatic time-based yielding (the block becomes `complex + yielding`)
+- Add explicit yield annotations
+- Mark the block `@[unyielding]` with justification (an escape hatch that may require review)
+
+#### Assurance Feature
+
+| Feature | `streamlined` | `cautious` | `rigorous` |
+|---------|--------------|------------|------------|
+| `guaranteed_yield` | disabled (time-based active but no discrepancies) | enabled (complex + unyielding = discrepancy) | enabled |
+| `yield_control` | time-based only | time-based + statement-count | time-based + statement-count |
+
+---
+
+## Feature 3: Parallelism via Tokio (Decisions 6, 13, 14)
+
+### Design
+
+Parallelism in ish is not a language-level feature — it is a runtime capability exposed through the standard library and the shim system. ish developers consume parallel functions; they do not write them. No parallel function accepts ish closures (Decision 13).
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│ Tokio Runtime (multi-threaded)                   │
+│                                                  │
+│  ┌──────────────────────────────────┐            │
+│  │ LocalSet (main thread)           │            │
+│  │                                  │            │
+│  │  ┌────────┐ ┌────────┐          │            │
+│  │  │ Task 1 │ │ Task 2 │  ...     │ ← ish code │
+│  │  │(spawn_ │ │(spawn_ │          │   (!Send)  │
+│  │  │ local) │ │ local) │          │            │
+│  │  └────────┘ └────────┘          │            │
+│  └──────────────────────────────────┘            │
+│                                                  │
+│  ┌──────────┐ ┌──────────┐                       │
+│  │ Parallel │ │ Parallel │  ...     ← Rust libs  │
+│  │ Task A   │ │ Task B   │            (Send)     │
+│  │ (spawn)  │ │ (spawn)  │                       │
+│  └──────────┘ └──────────┘                       │
+└─────────────────────────────────────────────────┘
+```
+
+- **ish tasks** (cooperative): Run on the `LocalSet`. Share the GC heap. Scheduled cooperatively via `spawn_local`. No `Send` requirement.
+- **Parallel tasks** (true parallelism): Run on Tokio's thread pool via `spawn`. Implemented in Rust. Require `Send`. Cannot access the GC heap directly.
+
+#### Parallel Shims
+
+The existing shim system is extended with a parallel variant. A **parallel shim** has the same interface as a regular shim (accepts symbol name, value object, parent shim) but returns a `Future` instead of a value:
+
+```
+Regular shim:  (symbol, value, parent_shim) -> Value
+Parallel shim: (symbol, value, parent_shim) -> Future<Value>
+```
+
+When ish code calls a parallel function:
+1. The runtime marshals ish values into the shim's parameter format.
+2. The parallel shim spawns a Tokio task (via `tokio::spawn`) and returns a `Future`.
+3. The ish code awaits (or spawns) the future from within the `LocalSet`.
+4. When the parallel task completes, its result is marshaled back into an ish value.
+
+#### Standard Library Parallel Functions (Decision 13)
+
+No parallel standard library function accepts ish closures. Accepting closures would pull all the parallelism complexity (thread safety, `Send`/`Sync`, data race prevention) back into the language. Instead, parallel functions accept only concrete parameters and return results.
+
+These are all I/O-bound operations implemented in Rust using Tokio's async primitives. CPU-bound parallelism (e.g., parallel map over a list) is handled by concurrent iteration on the `LocalSet` (single-threaded but interleaved), not by true multi-threaded parallelism.
+
+If a developer needs true CPU-bound parallelism, they write a Rust library with a parallel shim. This is a deliberate design choice: the complexity of parallel computation stays in Rust, where the compiler enforces `Send`/`Sync`.
+
+#### From ish Code
+
+```ish
+// Async file I/O — transparently async via Tokio
+let data = file.read("input.txt")           // implicitly awaited at low assurance
+let data = await file.read("input.txt")     // explicit at high assurance
+
+// Concurrent (not parallel) iteration via standard library
+let results = concurrent_map(items, (item) => {
+    let response = http.get(item.url)
+    { url: item.url, response: response }
+})
+```
+
+#### Why No User-Defined Parallel Functions
+
+Allowing ish developers to write parallel functions would require:
+1. Ensuring all captured values are `Send` — this leaks Rust's ownership model into ish.
+2. Thread-safe GC — the GC would need synchronization for cross-thread access.
+3. Data race prevention — shared mutable state across threads.
+
+By restricting parallelism to Rust-implemented shims, these problems become the Rust library author's responsibility. The ish developer sees only async functions with `Future` return types — the parallelism is invisible.
+
+#### Ledger Entry
+
+Functions from parallel shims carry a `parallel` entry in the ledger:
+
+```ish
+entry type Parallel {
+    applies_to: [function],
+    implies: [@[yielding]],
+    // A parallel function is always yielding from the caller's perspective
+}
+```
+
+The `parallel` entry is informational — it tells the developer and the analyzer that the function executes on a separate thread. It implies `yielding` because calling a parallel function always involves an async boundary (the future).
+
+---
+
+## Feature 4: Data Transfer, Streams, and I/O (Decisions 14, 18, 19)
+
+### Design
+
+Data transfer between the `LocalSet` thread and parallel tasks requires careful handling. The design rests on five core abstractions: `ByteBuffer`, `Reader`, `Writer`, `Stream<T>`, and `StreamWriter<T>`. The I/O standard library wraps Tokio ecosystem types directly — it does not spawn its own tasks.
+
+#### ByteBuffer (Decision 19)
+
+`ByteBuffer` is a single ish type representing a contiguous sequence of bytes. It abstracts over the three distinct Rust byte representations:
+
+| Rust type | Characteristics |
+|-----------|----------------|
+| `&[u8]` / `Vec<u8>` | Heap-allocated, single owner, deep copy on clone |
+| `bytes::Bytes` | Reference-counted, immutable, O(1) clone and slice, `Send + Sync` |
+| `bytes::BytesMut` | Uniquely-owned, mutable, `Send` only, can freeze to `Bytes` in O(1) |
+
+In ish, the developer works with `ByteBuffer` without choosing a Rust backing type. The runtime selects the optimal Rust representation based on the buffer's `Mutable` ledger entry:
+
+- An **immutable** `ByteBuffer` is backed by `bytes::Bytes`. It supports O(1) cloning and slicing, and can be safely shared across threads (for parallel shims).
+- A **mutable** `ByteBuffer` (carrying the `@[Mutable]` entry) is backed by `bytes::BytesMut`. It supports efficient append and in-place mutation, but cannot be shared — it has a single owner.
+
+Freezing (mutable → immutable) is O(1): the runtime calls `BytesMut::freeze()`, which produces an immutable `Bytes` without copying. Going the other direction (immutable → mutable) requires a copy, since `Bytes` is reference-counted and other references may exist.
+
+```ish
+// Immutable — backed by bytes::Bytes
+let data: ByteBuffer = file.read("input.txt")
+let slice = data.slice(0, 100)    // O(1), no copy
+let copy = data                    // O(1), reference count increment
+
+// Mutable — backed by bytes::BytesMut
+let mut buf: ByteBuffer = ByteBuffer.new(4096)
+buf.append(data)                   // append bytes
+buf.append_string("trailer")      // append from string
+
+// Freeze: mutable → immutable (O(1))
+let frozen: ByteBuffer = buf.freeze()
+```
+
+At low assurance, the developer does not need to think about mutability — the runtime manages it. At higher assurance, the `Mutable` ledger entry makes the distinction explicit, and the analyzer can verify that mutable buffers are not shared unsafely.
+
+**Marshaling for parallel shims:**
+- If an ish `ByteBuffer` is immutable, the shim clones the `Bytes` handle (O(1), no copy) and passes it to the parallel task.
+- If an ish `ByteBuffer` is mutable, the shim freezes it (O(1)) or takes ownership (moving it out of the ish heap). The ish variable becomes invalid.
+- For complex ish types (objects, lists), the parallel shim uses copy-in/copy-out semantics.
+
+#### Reader and Writer
+
+`Reader` and `Writer` are ish types that wrap Tokio's `AsyncRead` and `AsyncWrite` implementations. They provide direct byte-level access for operations where streaming is unnecessary.
+
+```ish
+// Reader — wraps any AsyncRead source
+let reader: Reader = file.open("data.bin")
+let chunk: ByteBuffer = reader.read(4096)     // read up to N bytes
+let all: ByteBuffer = reader.read_all()        // read everything
+reader.seek(0)                                  // seek (files only)
+reader.close()
+
+// Writer — wraps any AsyncWrite sink
+let writer: Writer = file.create("output.bin")
+writer.write(data)
+writer.flush()
+writer.close()
+```
+
+**Tokio mapping:**
+
+| ish expression | Tokio implementation |
+|---------------|---------------------|
+| `file.open(path)` | `tokio::fs::File::open(path)` → wrap in `Reader` |
+| `file.create(path)` | `tokio::fs::File::create(path)` → wrap in `Writer` |
+| `reader.read(n)` | `AsyncReadExt::read(&mut buf)` with `BytesMut` of capacity `n`, frozen to `Bytes` on return |
+| `reader.read_all()` | `AsyncReadExt::read_to_end()` → convert `Vec<u8>` to `Bytes` |
+| `reader.seek(pos)` | `AsyncSeekExt::seek()` (only on seekable sources — files, not sockets) |
+| `writer.write(data)` | `AsyncWriteExt::write_all()` |
+| `writer.flush()` | `AsyncWriteExt::flush()` |
+| `io.stdin()` | `tokio::io::stdin()` → wrap in `Reader` |
+| `io.stdout()` | `tokio::io::stdout()` → wrap in `Writer` |
+
+#### Unified Stream Type (Decision 18)
+
+ish uses a single `Stream<T>` abstraction with specialized implementations. The developer sees one type; the runtime selects the optimal implementation based on `T`:
+
+- **`Stream<ByteBuffer>`** uses efficient byte-oriented I/O backed by `AsyncRead`/`AsyncWrite` (via `tokio_util::io::ReaderStream` internally), providing chunked transfer with minimal overhead. For network I/O sources, this uses `bytes::Bytes` natively for zero-copy.
+- **`Stream<T>`** for other types uses bounded channels (`tokio::sync::mpsc`) for message-passing between tasks.
+
+`StreamWriter<T>` is the write half of a stream — the producer side that sends values into a stream.
+
+Stream combinators (`map`, `filter`, `take`, `zip`, `lines`, `decode`) work uniformly on all streams, backed by `tokio_stream::StreamExt` and `tokio_util::codec`.
+
+```ish
+// Byte stream from file
+let stream: Stream<ByteBuffer> = file.stream("large.csv")
+let lines: Stream<String> = stream.lines()
+let records: Stream<Record> = stream.decode(csv_codec)
+
+// Stream combinators work on all streams
+let valid_records = records.filter((r) => r.valid)
+
+// Consume the stream
+let results = concurrent_map(valid_records, (record) => {
+    store(record)
+})
+```
+
+#### I/O Types and Convenience Methods (Decision 19)
+
+Each I/O type provides convenience methods for common whole-resource operations alongside methods for opening streams directly. The developer does not need to create a `Reader` and then convert it to a stream — the I/O type can produce a stream in one step.
+
+##### File I/O
+
+```ish
+// Convenience — whole-file operations
+let data: ByteBuffer = file.read("input.txt")       // read entire file
+let text: String = file.read_string("input.txt")     // read as string
+file.write("output.txt", data)                        // write entire file
+
+// Streaming — incremental processing
+let stream: Stream<ByteBuffer> = file.stream("large.csv")
+
+// Reader/Writer — direct byte-level control
+let reader: Reader = file.open("data.bin")
+let writer: Writer = file.create("output.bin")
+```
+
+**Tokio mapping:**
+- `file.read(path)` → `tokio::fs::read(path)` → `Vec<u8>` → `Bytes` → immutable `ByteBuffer`
+- `file.read_string(path)` → `tokio::fs::read_to_string(path)`
+- `file.write(path, data)` → `tokio::fs::write(path, &data)`
+- `file.stream(path)` → `tokio::fs::File::open(path)` → `ReaderStream::new()` → yields `Bytes` chunks
+
+##### Standard I/O
+
+```ish
+// Convenience
+let line: String = io.read_line()          // read one line from stdin
+io.print("hello")                           // write to stdout, no newline
+io.println("hello")                         // write to stdout + newline
+io.eprint("warning")                        // write to stderr + newline
+
+// Streaming
+let lines: Stream<String> = io.stdin().stream().lines()
+
+// Reader/Writer
+let stdin: Reader = io.stdin()
+let stdout: Writer = io.stdout()
+let stderr: Writer = io.stderr()
+```
+
+**Tokio mapping:**
+- `io.read_line()` → `BufReader::new(tokio::io::stdin()).read_line()`
+- `io.print(s)` → `tokio::io::stdout().write_all(s.as_bytes())` + flush
+- `io.println(s)` → `tokio::io::stdout().write_all(s.as_bytes())` + newline + flush
+- `io.stdin()` → `tokio::io::stdin()` → wrap in `Reader`
+- `io.stdout()` → `tokio::io::stdout()` → wrap in `Writer`
+
+##### Network I/O (TCP)
+
+TCP connections are inherently streaming — there is no "read all" for a socket. Connections expose `Reader`/`Writer` and direct stream access.
+
+```ish
+// Connect and get reader/writer pair
+let conn = tcp.connect("host:8080")
+let reader: Reader = conn.reader()
+let writer: Writer = conn.writer()
+
+// Direct stream access
+let incoming: Stream<ByteBuffer> = conn.stream()
+let outgoing: StreamWriter<ByteBuffer> = conn.stream_writer()
+
+// Typed stream via codec
+let messages: Stream<Message> = conn.stream().decode(message_codec)
+```
+
+**Tokio mapping:**
+- `tcp.connect(addr)` → `TcpStream::connect(addr)` → wrap in connection object
+- `conn.reader()` → `TcpStream::into_split()` → `OwnedReadHalf` → wrap in `Reader`
+- `conn.writer()` → `OwnedWriteHalf` → wrap in `Writer`
+- `conn.stream()` → `ReaderStream::new(read_half)` → yields `Bytes` chunks (zero-copy via `try_read_buf` with `BytesMut`)
+- `conn.stream().decode(codec)` → `FramedRead::new(read_half, codec)` → yields decoded items
+
+##### Network I/O (UDP)
+
+UDP is datagram-based. Each receive yields one complete datagram.
+
+```ish
+let socket = udp.bind("0.0.0.0:9000")
+
+// Send/receive individual datagrams
+socket.send_to("host:9001", data)
+let (data, addr) = socket.recv_from()
+
+// Stream of incoming datagrams
+let datagrams: Stream<{data: ByteBuffer, addr: String}> = socket.stream()
+```
+
+**Tokio mapping:**
+- `udp.bind(addr)` → `UdpSocket::bind(addr)`
+- `socket.send_to(addr, data)` → `UdpSocket::send_to(&data, addr)`
+- `socket.recv_from()` → `UdpSocket::recv_buf_from(&mut BytesMut)` → freeze to `Bytes`
+- `socket.stream()` → custom stream wrapping `recv_from` in a loop
+
+##### Stream Composition
+
+Streams are composable. Combinators transform one stream into another, running as cooperative tasks on the `LocalSet`:
+
+```ish
+// Read a large file as a stream of byte chunks
+let bytes: Stream<ByteBuffer> = file.stream("large.csv")
+
+// Parse CSV rows (stream combinator via codec)
+let rows: Stream<CsvRow> = bytes.decode(csv_codec)
+
+// Filter and transform
+let valid_rows = rows.filter((row) => row.valid)
+let records = valid_rows.map((row) => row.to_record())
+
+// Consume with concurrent processing
+let results = concurrent_map(records, (record) => {
+    validate_and_store(record)
+})
+```
+
+**Tokio mapping for combinators:**
+- `.lines()` → `FramedRead` with `LinesCodec`
+- `.decode(codec)` → `FramedRead` with the codec's `Decoder` implementation
+- `.filter(predicate)` → `StreamExt::filter()`
+- `.map(transform)` → `StreamExt::map()`
+- `.take(n)` → `StreamExt::take()`
+- `.zip(other)` → `StreamExt::zip()`
+
+##### Tokio I/O Summary
+
+| Source | Tokio Type | ish Convenience | ish Stream | ish Reader/Writer | Zero-Copy |
+|--------|-----------|----------------|------------|-------------------|-----------|
+| stdin | `tokio::io::Stdin` | `io.read_line()` | `io.stdin().stream()` | `io.stdin()` → Reader | No |
+| stdout | `tokio::io::Stdout` | `io.print()`, `io.println()` | — | `io.stdout()` → Writer | No |
+| stderr | `tokio::io::Stderr` | `io.eprint()` | — | `io.stderr()` → Writer | No |
+| File | `tokio::fs::File` | `file.read()`, `file.write()` | `file.stream()` | `file.open()` → Reader, `file.create()` → Writer | No |
+| TCP | `tokio::net::TcpStream` | — | `conn.stream()` | `conn.reader()`, `conn.writer()` | Yes (`Bytes`) |
+| UDP | `tokio::net::UdpSocket` | `socket.send_to()`, `socket.recv_from()` | `socket.stream()` | — | Yes (`Bytes`) |
+
+All Tokio types are `Send + Sync`. Network I/O natively supports `BytesMut`/`Bytes` for zero-copy. File I/O and stdin/stdout use `spawn_blocking` internally (Tokio wraps blocking syscalls in thread pool tasks).
+
+#### Minimal I/O Library for Concurrent Implementation (Decision 19)
+
+The following subset of the I/O standard library is defined for implementation alongside the concurrency runtime. This is the minimal set needed to validate the design:
+
+| Function/Type | Category | Purpose |
+|--------------|----------|---------|
+| `ByteBuffer` | Type | Byte buffer with mutable/immutable semantics |
+| `ByteBuffer.new(capacity)` | Constructor | Create a mutable byte buffer |
+| `ByteBuffer.freeze()` | Method | Convert mutable → immutable (O(1)) |
+| `ByteBuffer.slice(start, end)` | Method | Immutable sub-buffer (O(1)) |
+| `ByteBuffer.len()` | Method | Buffer length |
+| `Reader` | Type | Wraps `AsyncRead` |
+| `Reader.read(n)` | Method | Read up to N bytes |
+| `Reader.read_all()` | Method | Read all remaining bytes |
+| `Reader.stream()` | Method | Convert Reader → `Stream<ByteBuffer>` |
+| `Reader.close()` | Method | Close the reader |
+| `Writer` | Type | Wraps `AsyncWrite` |
+| `Writer.write(data)` | Method | Write bytes |
+| `Writer.flush()` | Method | Flush buffered data |
+| `Writer.close()` | Method | Close the writer |
+| `Stream<T>` | Type | Async stream of values |
+| `Stream.map(fn)` | Combinator | Transform stream elements |
+| `Stream.filter(fn)` | Combinator | Filter stream elements |
+| `Stream.lines()` | Combinator | `Stream<ByteBuffer>` → `Stream<String>` |
+| `StreamWriter<T>` | Type | Write half of a stream |
+| `StreamWriter.send(value)` | Method | Send a value into the stream |
+| `StreamWriter.close()` | Method | Close the stream writer |
+| `file.read(path)` | Convenience | Read entire file → `ByteBuffer` |
+| `file.write(path, data)` | Convenience | Write entire file |
+| `file.stream(path)` | Convenience | Open file as `Stream<ByteBuffer>` |
+| `file.open(path)` | Convenience | Open file → `Reader` |
+| `file.create(path)` | Convenience | Create file → `Writer` |
+| `io.read_line()` | Convenience | Read one line from stdin |
+| `io.print(s)` | Convenience | Write to stdout (no newline) |
+| `io.println(s)` | Convenience | Write to stdout + newline |
+| `io.stdin()` | Convenience | stdin → `Reader` |
+| `io.stdout()` | Convenience | stdout → `Writer` |
+| `tcp.connect(addr)` | Convenience | Connect → connection object |
+| `conn.reader()` | Method | Connection → `Reader` |
+| `conn.writer()` | Method | Connection → `Writer` |
+| `conn.stream()` | Method | Connection → `Stream<ByteBuffer>` |
+
+This subset covers file I/O, standard I/O, and basic TCP — enough to validate the complete I/O pipeline from convenience functions through readers/writers to streams with combinators.
+
+> **Scope note (Decision 20):** The full I/O library described above is future work. For the concurrent implementation, only `println` needs to be implemented. It becomes async internally (writing to stdout via Tokio) but its ish-level interface and behavior are unchanged. All other I/O types (`ByteBuffer`, `Reader`, `Writer`, `Stream<T>`, `StreamWriter<T>`, `file.*`, `io.stdin()`, `tcp.*`, etc.) are deferred.
+
+---
+
+## Feature 5: Blocking (Eliminated — Decision 9)
+
+The `blocking` dimension from the original RFP is eliminated from the ish language. The rationale (from Decision 6):
+
+- There is no way to define a blocking function in ish. All ish functions run on the `LocalSet` and use Tokio async I/O.
+- Standard library functions that perform I/O use Tokio's async implementations (`tokio::fs`, `tokio::net`, `tokio::process`).
+- If a Rust library needs synchronous I/O, it wraps it in a parallel shim (which runs on the Tokio thread pool). From ish's perspective, this is a parallel function, not a blocking one.
+- The `Blocking` entry type is not needed. The `Parallel` entry type covers the relevant case.
+
+The only residual concern is FFI: if ish eventually supports calling arbitrary C/Rust functions, those functions might block. At that point, a `blocking` entry could be reintroduced, or all FFI calls could be required to go through parallel shims.
+
+---
+
+## Feature 6: Shell and Execution Architecture (Decisions 21, 22, 23)
+
+### Design
+
+The concurrency model requires rethinking how the shell and VM interact. The current prototype is entirely single-threaded: the shell reads input, parses it, calls `vm.run()`, waits for it to return, and loops. In the Tokio model, the VM must be able to run background tasks that outlive individual shell submissions — a `spawn` expression must be able to continue running after the shell prompt returns.
+
+#### Two-Thread Model (Decision 21)
+
+In interactive mode, there are two threads:
+
+```
+┌─ Shell Thread ──────────────────────────────────────┐
+│ Reedline read_line() → parse input → submit AST     │
+│ Wait for completion signal → show prompt → loop      │
+└──────────────────┬─────────────────▲─────────────────┘
+                   │ AST (Send)      │ Completion signal
+                   ▼                 │
+┌─ Main Thread (Tokio LocalSet) ─────┴─────────────────┐
+│ Receive AST → create task → run on VM                │
+│ Background futures continue running between tasks    │
+│ GC, Environment, Values — all stay on this thread    │
+│ All output → ExternalPrinter (interactive) or stdout  │
+└──────────────────────────────────────────────────────┘
+```
+
+- **Shell thread:** Runs Reedline (blocking `read_line()`), collects input, parses it via the ish parser, and submits the resulting `Program` AST to the main thread via a channel. The shell then waits for a completion signal. When the signal arrives, the shell shows the next prompt and loops back to collect more input. The shell thread is responsible only for prompts and command line input — it never displays program output. All program output (expression results, `println`, errors, background task output) goes through stdout or stderr via the Reedline `ExternalPrinter`, which means output from long-running or background tasks is displayed even while the shell thread is waiting.
+
+- **Main thread:** Runs the Tokio runtime with a `LocalSet`. The VM lives here. All `Value` objects, the `Environment`, and GC-managed state are confined to this thread (they use `Gc<GcCell<>>` which is `!Send`). The main thread receives AST submissions from the shell thread and executes them as tasks on the `LocalSet`.
+
+**Key property:** Futures spawned via `let x = spawn do_something()` are tasks on the `LocalSet`. When the shell-submitted task that spawned them completes and returns control to the shell, the spawned futures continue running on the `LocalSet`. They do not go out of scope — the `Future` value is bound to `x` in the VM's environment, which persists across shell submissions. The `LocalSet` continues polling all its tasks regardless of whether the shell is waiting for input.
+
+**Non-interactive mode:** When ish is started with a file or inline code, there is no shell thread. The main thread parses the input, creates a Tokio runtime and `LocalSet`, runs the program to completion, and exits. The `LocalSet` runs until all tasks complete (or until the top-level program returns, at which point remaining futures follow the `future_drop` rules from Decision 16).
+
+#### Communication Between Threads (Decision 23)
+
+The shell thread and main thread communicate via channels:
+
+- **Shell → Main:** A channel carrying `Program` AST nodes. The AST is composed entirely of `Send`-safe types (`String`, `i64`, `f64`, `bool`, `Vec<T>`, `Box<T>`, `Option<T>`). No `Gc<>` or `Rc<>` types appear in the AST.
+- **Main → Shell:** A channel carrying completion signals. The main thread does not send display content to the shell thread — all program output goes through the Reedline `ExternalPrinter` (see Output Routing below). The completion signal tells the shell thread that the submitted task has finished, so the shell can display the next prompt.
+- **Main → Terminal (output):** All program output — expression results, `println`, error messages, background task output — is written to stdout/stderr via the Reedline `ExternalPrinter` in interactive mode. This allows output to appear even while the shell thread is blocked waiting for input. In non-interactive mode, output goes directly to OS stdout/stderr.
+
+```rust
+// Sketch of the channel types
+enum TaskSubmission {
+    Execute(Program),
+    Shutdown,
+}
+
+enum TaskCompletion {
+    Done,       // Task finished; output already routed via ExternalPrinter
+    Error,      // Task errored; error already routed via ExternalPrinter
+}
+```
+
+#### Parser Placement (Decision 22)
+
+The parser runs on the shell thread. This is the right choice for several reasons:
+
+1. **Validation requires parsing.** Reedline's multiline input validator already calls the parser to check for incomplete expressions. If the parser ran on the main thread, every keystroke that triggers validation would require a cross-thread round-trip, adding latency to the editing experience.
+2. **The parser is stateless.** `ish_parser::parse(input: &str) -> Result<Program, Vec<ParseError>>` takes a string and returns an owned AST. It has no mutable state, no connection to the VM, and no dependency on the GC.
+3. **The AST is `Send`.** `Program` and all its constituent types (`Statement`, `Expression`, `TypeAnnotation`, etc.) contain only `Send`-safe types. The parsed program can cross the thread boundary safely.
+4. **The shell thread is otherwise idle during parsing.** While the user is typing, the shell thread runs Reedline. Once the user presses Enter and input is validated, the shell thread parses the full input and submits the AST. No time is wasted.
+5. **In non-interactive mode, the distinction is moot.** There is no shell thread; the main thread parses and executes.
+
+The alternative — parsing on the main thread — would mean the shell thread sends raw strings and waits for the main thread to parse them before execution begins. This adds unnecessary serialization: the main thread would need to handle both parsing and execution, while the shell thread sits idle. It also means parse errors would need to cross threads before being displayed.
+
+#### Output Routing (Decision 23)
+
+The shell thread is responsible only for prompts and command line input. All program output — expression results, `println`, error messages, background task output — goes through stdout/stderr, never through a result channel to the shell thread.
+
+In interactive mode, stdout writes use Reedline's `ExternalPrinter` API. This API allows the main thread (or any thread) to inject output into the terminal while the Reedline prompt is active. Reedline handles redrawing the prompt after the output is displayed, preventing prompt corruption from background task output.
+
+Code that writes to stdout must auto-detect whether the VM is running in interactive (shell) mode:
+
+- **Interactive mode:** Write through the Reedline `ExternalPrinter`. This ensures output from background futures appears cleanly without corrupting the prompt.
+- **Non-interactive mode:** Write directly to OS stdout. There is no Reedline prompt to protect.
+
+This auto-detection is internal to the runtime — ish user code always calls `println("hello")` regardless of mode. The runtime routes the output to the appropriate destination.
+
+
+#### `println` Becomes Async (Decision 20, clarified)
+
+The existing `println` builtin currently writes directly to stdout via `std::println!`. In the async runtime, this must change:
+
+1. **On the `LocalSet` thread**, `println` writes to stdout via the Reedline `ExternalPrinter` (interactive mode) or via Tokio's async I/O to OS stdout (non-interactive mode), making it a yielding operation.
+2. **The ish-level interface does not change** — `println("hello")` still prints "hello" followed by a newline. The developer does not need to `await` it at low assurance (Decision 3: implicit await).
+3. **At high assurance**, the developer would see that `println` is a yielding function (because it performs I/O), and would need to annotate accordingly when `await_required` is enabled.
+4. **In interactive mode**, `println` output from background tasks is routed through the `ExternalPrinter` (Decision 23), so it appears cleanly without corrupting the prompt.
+
+#### Shell Command Execution
+
+The current shell executes external commands via `std::process::Command`. In the Tokio model, this must migrate to `tokio::process::Command` to avoid blocking the `LocalSet` thread.
+
+At low assurance, shell commands still look synchronous:
+
+```ish
+let output = $(ls -la)  // implicitly awaited
+```
+
+This requires the shell command execution path to become async internally.
+
+#### Interpreter Architecture Impact
+
+The tree-walking interpreter must become async-aware. Each evaluation step that might yield (function calls, loop iterations) must be an `.await` point. This likely means the interpreter's `eval` function becomes `async fn eval(...)`.
+
+This is a significant refactor of the prototype. However, since the prototype is a design vehicle (not a production compiler), the change validates that the Tokio model is implementable.
+
+#### Concerns
+
+The two-thread model introduces concerns that must be addressed during implementation:
+
+1. **Environment persistence across submissions.** The VM's `Environment` persists across shell submissions — variables defined in one submission are visible in the next. This works because the VM stays on the main thread across submissions. The shell thread never needs to access the environment.
+
+2. **Future lifetime semantics.** When a shell submission like `let x = spawn do_something()` returns, the future is bound to `x` in the environment. The `LocalSet` continues polling it. If the user later types `await x`, a new submission accesses the same future. This requires that the `Future` value stored in the environment carries a reference to the `JoinHandle` of the spawned `LocalSet` task.
+
+3. **Program exit with running futures.** When the user exits the shell (Ctrl+D), or when a file/inline program completes with spawned futures still running, the runtime must decide what to do. Options: (a) wait for all futures, (b) cancel all futures (triggering `future_drop` discrepancies if enabled), (c) wait with a timeout then cancel. This is an open question.
+
+4. **GC never crosses threads.** All `Gc<>`, `GcCell<>`, `Value`, `Environment`, and `IshVm` types are `!Send` and stay on the main thread. The only data crossing thread boundaries is `Program` (shell → main, `Send`-safe) and completion signals (main → shell). All output (including display-formatted values and error messages) is routed through the `ExternalPrinter`, not through the shell thread. This is a hard constraint — the architecture must never attempt to send GC-managed values between threads.
+
+5. **Error display.** Parse errors are detected on the shell thread (before submission) and written to stderr directly. Runtime errors are detected on the main thread and written to stderr via the `ExternalPrinter` (interactive mode) or directly (non-interactive mode). `RuntimeError` values (which may contain `Value` references and thus `Gc<>` types) are formatted to strings on the main thread before output.
+
+---
+
+## Documentation Updates
+
+The following documentation files will need updates:
+
+| File | Change |
+|------|--------|
+| `docs/spec/concurrency.md` | **New file** — full specification of cooperative multitasking, the Tokio runtime model, streams, and I/O |
+| `docs/spec/assurance-ledger.md` | Add `Complexity`, `Yielding`, and `Parallel` entry types; add `async_annotation`, `await_required`, `guaranteed_yield`, `yield_control`, `future_drop` features to standard definitions |
+| `docs/spec/types.md` | Add `Future<T>`, `Stream<T>`, `StreamWriter<T>`, `Reader`, `Writer`, `ByteBuffer` types |
+| `docs/spec/syntax.md` | Add `async`, `await`, `spawn`, `yield`, `yield every` syntax |
+| `docs/spec/execution.md` | Describe Tokio runtime integration in each execution configuration; two-thread model for interactive shell (shell thread + VM/LocalSet thread); non-interactive mode (single thread); note that thin shell becomes async |
+| `docs/spec/memory.md` | Note that GC remains single-threaded on the `LocalSet` thread; parallel tasks use Rust-managed memory; `ByteBuffer` mutability and freeze semantics |
+| `docs/spec/modules.md` | Extend shim system documentation with parallel shim variant |
+| `docs/spec/INDEX.md` | Add link to concurrency spec |
+| `docs/spec/errors.md` | Add cancellation error type; add future-drop discrepancy |
+| `GLOSSARY.md` | Add terms: async function, await, spawn, yield, future, complexity entry, yielding entry, parallel entry, cooperative multitasking, parallel multitasking, parallel shim, LocalSet, yield budget, yield-eligible point, stream, stream writer, reader, writer, byte buffer, codec, shell thread, main thread, ExternalPrinter, completion signal |
+| `docs/project/open-questions.md` | Mark "No description of concurrency / parallelism" as resolved; add new open questions from this proposal |
+| `docs/project/roadmap.md` | Add concurrency design milestone |
+| `docs/user-guide/` | Add concurrency user guide |
+| `docs/ai-guide/` | Add concurrency playbook |
+
+Remember to update `## Referenced by` sections in all modified files.
+
+---
+
+## History Updates
+
+- [x] Create `docs/project/history/2026-03-23-concurrency/` directory
+- [x] Add `v1.md` with the initial proposal
+- [x] Add `v2.md` with the first revision
+- [x] Add `v3.md` with the second revision
+- [x] Add `v4.md` with the third revision
+- [x] Add `summary.md` with narrative prose
+- [x] Update `docs/project/history/INDEX.md`
+
+---
+
+## Referenced by
+
+- [docs/project/proposals/INDEX.md](INDEX.md)

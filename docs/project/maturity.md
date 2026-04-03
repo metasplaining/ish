@@ -3,7 +3,7 @@ title: "Feature Maturity Matrix"
 category: project
 audience: [human-dev, ai-agent]
 status: draft
-last-verified: 2026-03-19
+last-verified: 2026-04-02
 depends-on: [docs/spec/INDEX.md]
 ---
 
@@ -29,6 +29,7 @@ Tracks which language features are designed, prototyped, and production-ready.
 | Polymorphism | partial | partial | ❌ | ❌ | ❌ |
 | Error handling | ✅ | ✅ | ✅ | partial | ❌ |
 | Syntax / grammar | ✅ | ✅ | ✅ | partial | ❌ |
+| Concurrency | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Pattern matching | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Standard library | ❌ | ❌ | partial | ❌ | ❌ |
 | Parser | ✅ | partial | ✅ | partial | ❌ |

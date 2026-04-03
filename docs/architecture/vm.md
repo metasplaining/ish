@@ -3,8 +3,8 @@ title: "Architecture: ish-vm"
 category: architecture
 audience: [all]
 status: draft
-last-verified: 2026-03-19
-depends-on: [docs/architecture/overview.md, docs/architecture/ast.md]
+last-verified: 2026-03-31
+depends-on: [docs/architecture/overview.md, docs/architecture/ast.md, docs/spec/concurrency.md]
 ---
 
 # ish-vm
@@ -28,14 +28,48 @@ pub enum Value {
     Object(ObjectRef),              // Gc<GcCell<HashMap<String, Value>>>
     List(ListRef),                  // Gc<GcCell<Vec<Value>>>
     Function(FunctionRef),          // Gc<IshFunction>
-    BuiltinFunction(BuiltinRef),    // Rc<BuiltinFn>
+    Future(FutureRef),              // Rc<RefCell<Option<JoinHandle>>>
 }
 ```
 
 - **GC-managed:** Objects, Lists, and Functions use the `gc` crate (v0.5)
 - **Strings** use `Rc<String>` (cheap cloning, no GC overhead for immutable data)
-- **`PartialEq`** supports cross-type Int/Float comparison and Char equality
+- **`PartialEq`** supports cross-type Int/Float comparison, Char equality, and Future identity equality (`Rc::ptr_eq`)
 - **`is_truthy()`** — false for `false`, `0`, `0.0`, `Null`; true for everything else (including `Char`)
+- **No `BuiltinFunction` variant** — all builtins are `Function` values with compiled implementations
+
+### Function Implementation
+
+Functions use a `FunctionImplementation` enum to distinguish interpreted from compiled execution:
+
+```rust
+pub enum FunctionImplementation {
+    Interpreted(Statement),       // Tree-walking via exec_statement
+    Compiled(Shim),               // Synchronous shim function
+}
+
+pub type Shim = Rc<dyn Fn(&[Value]) -> Result<Value, RuntimeError>>;
+```
+
+`IshFunction` carries the implementation along with metadata:
+
+```rust
+pub struct IshFunction {
+    pub name: Option<String>,
+    pub params: Vec<String>,
+    pub param_types: Vec<Option<TypeAnnotation>>,
+    pub return_type: Option<TypeAnnotation>,
+    pub implementation: FunctionImplementation,
+    pub closure_env: Environment,
+    pub is_async: bool,
+    pub has_yielding_entry: Option<bool>,  // None=ambiguous, Some(true)=yielding, Some(false)=unyielding
+}
+```
+
+**Shim types** (behavioral, not structural — all use the same `Shim` type):
+- **Unyielding shims** (`len`, `type_of`, etc.) — call logic directly, return a plain `Value`.
+- **Yielding shims** — spawn work via `spawn_local`, return `Value::Future`.
+- **Parallel shims** (`print`, `read_file`, etc.) — marshal args to `Send`-safe form, `spawn_blocking` + `spawn_local` bridge, return `Value::Future`.
 
 ---
 
@@ -83,6 +117,26 @@ pub struct IshVm {
 
 **Control flow** uses `ControlFlow::None`, `ControlFlow::Return(Value)`, `ControlFlow::ExprValue(Value)`, `ControlFlow::Throw(Value)`.
 
+### Async Execution
+
+The interpreter's core `eval` function is `async`. All execution runs inside a Tokio `LocalSet` via `spawn_local`, keeping GC-managed values `!Send`-safe. Key implications:
+
+- `spawn` creates a new task on the `LocalSet` via `tokio::task::spawn_local()`, returning a `Future<T>` value that wraps the `JoinHandle`.
+- `await` suspends the current task, yielding control to the Tokio scheduler until the awaited future resolves.
+- At low assurance, calls to async standard library functions are implicitly awaited.
+
+### Yield Budget
+
+At yield-eligible points (loop back-edges, function call sites, explicit `yield` statements), the interpreter checks a time-based yield budget (~1ms default). If the budget is exhausted, it inserts `tokio::task::yield_now().await` to give other tasks a chance to run. At higher assurance levels, `yield every N` (statement-count-based) and `@[yield_budget(Xus)]` (custom time threshold) provide fine-grained control.
+
+### Future Value
+
+The `Value` enum includes a `Future` variant wrapping a `JoinHandle` from `spawn_local`. When a `Future` is dropped without being awaited, `JoinHandle::abort()` cancels the underlying task. `defer` and `with` cleanup blocks still execute in cancelled tasks. Awaiting a cancelled future returns a cancellation error (E011).
+
+### Output Routing
+
+In interactive mode, `println` and expression result display route through Reedline's `ExternalPrinter` (writing to a channel that the shell thread reads). In non-interactive mode, output goes directly to OS stdout/stderr. Background task output (errors, println from spawned tasks) also goes through the same routing mechanism. See [shell.md](shell.md) for the two-thread architecture.
+
 **Short-circuit evaluation:** `And` and `Or` operators only evaluate the right operand when needed.
 
 **Division by zero** returns a `RuntimeError` rather than panicking.
@@ -110,20 +164,26 @@ The throw audit only adds `@Error` entries. Other error classifications (`CodedE
 
 ## Builtins (`builtins.rs`)
 
-49 Rust-native functions registered at VM startup. All take `&[Value]` and return `Result<Value, RuntimeError>`.
+49 Rust-native functions registered at VM startup as `IshFunction` values with `Compiled(Shim)` implementations. All builtins are `Value::Function` — there is no separate `BuiltinFunction` type. To an outside observer, builtins are indistinguishable from user-defined functions.
 
-| Group | Functions |
-|-------|-----------||
-| I/O | `print`, `println`, `read_file`, `write_file` |
-| Strings | `str_concat`, `str_length`, `str_slice`, `str_contains`, `str_starts_with`, `str_replace`, `str_split`, `str_to_upper`, `str_to_lower`, `str_char_at`, `str_trim` |
-| Lists | `list_push`, `list_pop`, `list_length`, `list_get`, `list_set`, `list_slice`, `list_join` |
-| Objects | `obj_get`, `obj_set`, `obj_has`, `obj_keys`, `obj_values`, `obj_remove` |
-| Types | `type_of`, `is_type` |
-| Conversion | `to_string`, `to_int`, `to_float`, `char` |
-| Errors | `is_error`, `error_message`, `error_code` |
-| Ledger | `active_standard`, `feature_state`, `has_standard`, `has_entry_type` |
+| Group | Functions | Yielding |
+|-------|-----------|----------|
+| I/O | `print`, `println`, `read_file`, `write_file` | `Some(true)` — parallel shims, return `Value::Future` |
+| Strings | `str_concat`, `str_length`, `str_slice`, `str_contains`, `str_starts_with`, `str_replace`, `str_split`, `str_to_upper`, `str_to_lower`, `str_char_at`, `str_trim` | `Some(false)` — unyielding |
+| Lists | `list_push`, `list_pop`, `list_length`, `list_get`, `list_set`, `list_slice`, `list_join` | `Some(false)` |
+| Objects | `obj_get`, `obj_set`, `obj_has`, `obj_keys`, `obj_values`, `obj_remove` | `Some(false)` |
+| Types | `type_of`, `is_type` | `Some(false)` |
+| Conversion | `to_string`, `to_int`, `to_float`, `char` | `Some(false)` |
+| Errors | `is_error`, `error_message`, `error_code` | `Some(false)` |
+| Ledger | `active_standard`, `feature_state`, `has_standard`, `has_entry_type` | `Some(false)` |
 
-Ledger builtins need VM access (they query `self.ledger`), so they are intercepted by name in `call_function` rather than using the standard closure dispatch. Stub closures are registered to make the names callable; reaching the stub body is an error.
+**Unified dispatch:** `call_function_inner` handles all functions via a single `Value::Function` match arm. Arity checking and parameter type auditing apply uniformly to builtins and user-defined functions. The match then dispatches on `FunctionImplementation::Interpreted` vs `Compiled`.
+
+**Ledger builtins** need `&mut IshVm` access (they query `self.ledger`), so they are intercepted by name in `call_function_inner` *before* the implementation dispatch. Stub shims are registered so the names are callable and metadata is available; reaching the stub body is an error.
+
+**Implied await:** When a `Compiled` shim returns `Value::Future` from a bare function call (not under `await` or `spawn`), the `FunctionCall` handler checks the `await_required` feature. If not active, the future is immediately awaited (implied await). If active, the future is returned as-is. This makes parallel builtins backward-compatible at low assurance.
+
+**I/O completion:** Parallel shim futures do not resolve until the I/O operation is actually complete. In interactive mode, the shim sends output plus a `oneshot` acknowledgment channel; the future resolves only after the shell confirms the write.
 
 ---
 
@@ -219,3 +279,4 @@ The error hierarchy uses a structural model: only `@Error` is a predefined entry
 - [docs/spec/types.md](../spec/types.md)
 - [docs/spec/errors.md](../spec/errors.md)
 - [docs/spec/assurance-ledger.md](../spec/assurance-ledger.md)
+- [docs/spec/concurrency.md](../spec/concurrency.md)

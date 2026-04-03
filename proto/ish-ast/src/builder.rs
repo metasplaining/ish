@@ -54,6 +54,7 @@ impl ProgramBuilder {
             body: Box::new(block),
             visibility: None,
             type_params: vec![],
+            is_async: false,
         })
     }
 
@@ -144,6 +145,7 @@ impl BlockBuilder {
         self.stmt(Statement::While {
             condition,
             body: Box::new(body),
+            yield_every: None,
         })
     }
 
@@ -158,6 +160,7 @@ impl BlockBuilder {
             variable: variable.into(),
             iterable,
             body: Box::new(body),
+            yield_every: None,
         })
     }
 
@@ -176,6 +179,7 @@ impl BlockBuilder {
             body: Box::new(block),
             visibility: None,
             type_params: vec![],
+            is_async: false,
         })
     }
 

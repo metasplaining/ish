@@ -11,10 +11,10 @@ use ish_ast::builder::ProgramBuilder;
 use ish_vm::interpreter::IshVm;
 
 /// Register the analyzer function into the VM's global environment.
-pub fn register_analyzer(vm: &mut IshVm) {
+pub async fn register_analyzer(vm: &mut IshVm) {
     let analyzer_program = build_analyzer();
     // Execute the program to define the functions
-    vm.run(&analyzer_program).unwrap();
+    vm.run(&analyzer_program).await.unwrap();
 }
 
 /// Build the analyzer as an ish program (AST).
@@ -465,15 +465,15 @@ mod tests {
     use ish_vm::reflection::program_to_value;
     use std::rc::Rc;
 
-    fn make_vm() -> IshVm {
+    async fn make_vm() -> IshVm {
         let mut vm = IshVm::new();
-        crate::load_all(&mut vm);
+        crate::load_all(&mut vm).await;
         vm
     }
 
-    #[test]
-    fn test_analyzer_detects_undeclared_variable() {
-        let mut vm = make_vm();
+    #[tokio::test]
+    async fn test_analyzer_detects_undeclared_variable() {
+        let mut vm = make_vm().await;
 
         // Build a test program that references an undeclared variable
         let test_program = ProgramBuilder::new()
@@ -510,7 +510,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&call_prog).unwrap();
+        let result = vm.run(&call_prog).await.unwrap();
 
         // Check that warnings contain "undeclared variable: b"
         if let Value::Object(ref obj_ref) = result {
@@ -529,9 +529,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_analyzer_no_warnings_for_valid_program() {
-        let mut vm = make_vm();
+    #[tokio::test]
+    async fn test_analyzer_no_warnings_for_valid_program() {
+        let mut vm = make_vm().await;
 
         let test_program = ProgramBuilder::new()
             .var_decl("x", Expression::int(10))
@@ -554,7 +554,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&call_prog).unwrap();
+        let result = vm.run(&call_prog).await.unwrap();
 
         if let Value::Object(ref obj_ref) = result {
             let map = obj_ref.borrow();
@@ -570,9 +570,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_check_returns() {
-        let mut vm = make_vm();
+    #[tokio::test]
+    async fn test_check_returns() {
+        let mut vm = make_vm().await;
 
         // A function with return
         let test_program = ProgramBuilder::new()
@@ -604,13 +604,13 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&check_prog).unwrap();
+        let result = vm.run(&check_prog).await.unwrap();
         assert_eq!(result, Value::Bool(true));
     }
 
-    #[test]
-    fn test_is_constant_expr() {
-        let mut vm = make_vm();
+    #[tokio::test]
+    async fn test_is_constant_expr() {
+        let mut vm = make_vm().await;
 
         // Build a constant expression: 2 + 3
         let const_expr = Expression::binary(BinaryOperator::Add, Expression::int(2), Expression::int(3));
@@ -624,7 +624,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&check_prog).unwrap();
+        let result = vm.run(&check_prog).await.unwrap();
         assert_eq!(result, Value::Bool(true));
 
         // Non-constant: x + 3
@@ -639,7 +639,7 @@ mod tests {
             )),
         ]);
 
-        let result2 = vm.run(&check_prog2).unwrap();
+        let result2 = vm.run(&check_prog2).await.unwrap();
         assert_eq!(result2, Value::Bool(false));
     }
 }

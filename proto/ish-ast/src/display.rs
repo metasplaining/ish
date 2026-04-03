@@ -64,12 +64,12 @@ impl<'a> fmt::Display for StmtDisplay<'a> {
                 }
                 Ok(())
             }
-            Statement::While { condition, body } => {
+            Statement::While { condition, body, .. } => {
                 indent(f, d)?;
                 write!(f, "while {} ", ExprDisplay(condition))?;
                 write!(f, "{}", StmtDisplay(body, d))
             }
-            Statement::ForEach { variable, iterable, body } => {
+            Statement::ForEach { variable, iterable, body, .. } => {
                 indent(f, d)?;
                 write!(f, "for {} in {} ", variable, ExprDisplay(iterable))?;
                 write!(f, "{}", StmtDisplay(body, d))
@@ -86,9 +86,13 @@ impl<'a> fmt::Display for StmtDisplay<'a> {
                 indent(f, d)?;
                 write!(f, "{};", ExprDisplay(expr))
             }
-            Statement::FunctionDecl { name, params, body, .. } => {
+            Statement::FunctionDecl { name, params, body, is_async, .. } => {
                 indent(f, d)?;
-                write!(f, "fn {}(", name)?;
+                if *is_async {
+                    write!(f, "async fn {}(", name)?;
+                } else {
+                    write!(f, "fn {}(", name)?;
+                }
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -225,6 +229,10 @@ impl<'a> fmt::Display for StmtDisplay<'a> {
                 indent(f, d)?;
                 write!(f, "<incomplete: {:?}>", kind)
             }
+            Statement::Yield => {
+                indent(f, d)?;
+                write!(f, "yield;")
+            }
         }
     }
 }
@@ -293,8 +301,12 @@ impl<'a> fmt::Display for ExprDisplay<'a> {
             Expression::IndexAccess { object, index } => {
                 write!(f, "{}[{}]", ExprDisplay(object), ExprDisplay(index))
             }
-            Expression::Lambda { params, body } => {
-                write!(f, "fn(")?;
+            Expression::Lambda { params, body, is_async } => {
+                if *is_async {
+                    write!(f, "async fn(")?;
+                } else {
+                    write!(f, "fn(")?;
+                }
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -323,6 +335,14 @@ impl<'a> fmt::Display for ExprDisplay<'a> {
             }
             Expression::Incomplete { kind } => {
                 write!(f, "<incomplete: {:?}>", kind)
+            }
+            Expression::Await { callee, args } => {
+                write!(f, "await {}({})", ExprDisplay(callee),
+                    args.iter().map(|a| format!("{}", ExprDisplay(a))).collect::<Vec<_>>().join(", "))
+            }
+            Expression::Spawn { callee, args } => {
+                write!(f, "spawn {}({})", ExprDisplay(callee),
+                    args.iter().map(|a| format!("{}", ExprDisplay(a))).collect::<Vec<_>>().join(", "))
             }
         }
     }

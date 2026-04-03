@@ -1,4 +1,5 @@
 use gc::{Finalize, Gc, GcCell, Trace};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
@@ -6,6 +7,36 @@ use std::rc::Rc;
 use ish_ast::Statement;
 use crate::environment::Environment;
 use crate::error::RuntimeError;
+
+/// Thread-local set of future IDs that have been spawned but not awaited.
+thread_local! {
+    static UNAWAITED_FUTURES: RefCell<Vec<u64>> = RefCell::new(Vec::new());
+    static NEXT_FUTURE_ID: RefCell<u64> = RefCell::new(0);
+}
+
+fn register_future() -> u64 {
+    NEXT_FUTURE_ID.with(|id| {
+        let current = *id.borrow();
+        *id.borrow_mut() = current + 1;
+        UNAWAITED_FUTURES.with(|set| set.borrow_mut().push(current));
+        current
+    })
+}
+
+fn mark_future_awaited(id: u64) {
+    UNAWAITED_FUTURES.with(|set| {
+        set.borrow_mut().retain(|&i| i != id);
+    });
+}
+
+/// Get the count of futures that were spawned but never awaited, and reset.
+pub fn take_unawaited_future_count() -> usize {
+    UNAWAITED_FUTURES.with(|set| {
+        let count = set.borrow().len();
+        set.borrow_mut().clear();
+        count
+    })
+}
 
 /// Core runtime value type for the ish interpreter.
 #[derive(Clone, Debug, Trace, Finalize)]
@@ -19,7 +50,7 @@ pub enum Value {
     Object(ObjectRef),
     List(ListRef),
     Function(FunctionRef),
-    BuiltinFunction(#[unsafe_ignore_trace] BuiltinRef),
+    Future(#[unsafe_ignore_trace] FutureRef),
 }
 
 // ── Object ──────────────────────────────────────────────────────────────────
@@ -44,6 +75,27 @@ pub fn new_list(items: Vec<Value>) -> Value {
 
 // ── Function ────────────────────────────────────────────────────────────────
 
+/// Synchronous shim function: receives validated args, returns a Value (which may be Future).
+pub type Shim = Rc<dyn Fn(&[Value]) -> Result<Value, RuntimeError>>;
+
+/// How a function is executed.
+#[derive(Clone)]
+pub enum FunctionImplementation {
+    /// Tree-walking interpreted execution.
+    Interpreted(Statement),
+    /// Synchronous compiled shim dispatch.
+    Compiled(Shim),
+}
+
+impl fmt::Debug for FunctionImplementation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FunctionImplementation::Interpreted(_) => write!(f, "Interpreted(...)"),
+            FunctionImplementation::Compiled(_) => write!(f, "Compiled(...)"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Trace, Finalize)]
 pub struct IshFunction {
     pub name: Option<String>,
@@ -54,8 +106,13 @@ pub struct IshFunction {
     #[unsafe_ignore_trace]
     pub return_type: Option<ish_ast::TypeAnnotation>,
     #[unsafe_ignore_trace]
-    pub body: Statement, // must be a Block
+    pub implementation: FunctionImplementation,
     pub closure_env: Environment,
+    #[unsafe_ignore_trace]
+    pub is_async: bool,
+    /// Yielding classification: Some(true) = yielding, Some(false) = unyielding, None = unclassified.
+    #[unsafe_ignore_trace]
+    pub has_yielding_entry: Option<bool>,
 }
 
 pub type FunctionRef = Gc<IshFunction>;
@@ -67,41 +124,90 @@ pub fn new_function(
     return_type: Option<ish_ast::TypeAnnotation>,
     body: Statement,
     closure_env: Environment,
+    is_async: bool,
 ) -> Value {
     Value::Function(Gc::new(IshFunction {
         name,
         params,
         param_types,
         return_type,
-        body,
+        implementation: FunctionImplementation::Interpreted(body),
         closure_env,
+        is_async,
+        has_yielding_entry: None,
     }))
 }
 
-// ── Builtin Function ────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-pub struct BuiltinFn {
-    pub name: String,
-    pub func: Rc<dyn Fn(&[Value]) -> Result<Value, RuntimeError>>,
+/// Create a compiled (shim-based) function value.
+pub fn new_compiled_function(
+    name: impl Into<String>,
+    params: Vec<String>,
+    param_types: Vec<Option<ish_ast::TypeAnnotation>>,
+    return_type: Option<ish_ast::TypeAnnotation>,
+    shim: impl Fn(&[Value]) -> Result<Value, RuntimeError> + 'static,
+    has_yielding_entry: Option<bool>,
+) -> Value {
+    Value::Function(Gc::new(IshFunction {
+        name: Some(name.into()),
+        params,
+        param_types,
+        return_type,
+        implementation: FunctionImplementation::Compiled(Rc::new(shim)),
+        closure_env: Environment::new(),
+        is_async: false,
+        has_yielding_entry,
+    }))
 }
 
-impl fmt::Debug for BuiltinFn {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<builtin:{}>", self.name)
+// ── Future ──────────────────────────────────────────────────────────────────
+
+/// A reference to a spawned task's JoinHandle. When dropped without being
+/// awaited, the underlying task is cancelled via `abort()`.
+#[derive(Clone)]
+pub struct FutureRef {
+    inner: Rc<RefCell<Option<tokio::task::JoinHandle<Result<Value, RuntimeError>>>>>,
+    id: u64,
+}
+
+impl FutureRef {
+    pub fn new(handle: tokio::task::JoinHandle<Result<Value, RuntimeError>>) -> Self {
+        let id = register_future();
+        FutureRef {
+            inner: Rc::new(RefCell::new(Some(handle))),
+            id,
+        }
+    }
+
+    /// Take the JoinHandle out (for awaiting). Returns None if already taken.
+    pub fn take(&self) -> Option<tokio::task::JoinHandle<Result<Value, RuntimeError>>> {
+        let handle = self.inner.borrow_mut().take();
+        if handle.is_some() {
+            mark_future_awaited(self.id);
+        }
+        handle
     }
 }
 
-pub type BuiltinRef = Rc<BuiltinFn>;
+impl fmt::Debug for FutureRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let status = if self.inner.borrow().is_some() {
+            "pending"
+        } else {
+            "consumed"
+        };
+        write!(f, "<future:{}>", status)
+    }
+}
 
-pub fn new_builtin(
-    name: impl Into<String>,
-    func: impl Fn(&[Value]) -> Result<Value, RuntimeError> + 'static,
-) -> Value {
-    Value::BuiltinFunction(Rc::new(BuiltinFn {
-        name: name.into(),
-        func: Rc::new(func),
-    }))
+impl Drop for FutureRef {
+    fn drop(&mut self) {
+        // Only abort if this is the last reference and handle hasn't been taken (awaited)
+        if Rc::strong_count(&self.inner) == 1 {
+            if let Some(handle) = self.inner.borrow_mut().take() {
+                handle.abort();
+            }
+        }
+    }
 }
 
 // ── Value methods ───────────────────────────────────────────────────────────
@@ -130,7 +236,7 @@ impl Value {
             Value::Object(_) => "object",
             Value::List(_) => "list",
             Value::Function(_) => "function",
-            Value::BuiltinFunction(_) => "function",
+            Value::Future(_) => "future",
         }
     }
 
@@ -168,7 +274,7 @@ impl Value {
                     "<fn:anonymous>".to_string()
                 }
             }
-            Value::BuiltinFunction(b) => format!("<builtin:{}>", b.name),
+            Value::Future(_) => "<future>".to_string(),
         }
     }
 }
@@ -194,6 +300,8 @@ impl PartialEq for Value {
                 let b = b.borrow();
                 *a == *b
             }
+            // Futures use identity equality (same Rc pointer)
+            (Value::Future(a), Value::Future(b)) => Rc::ptr_eq(&a.inner, &b.inner),
             _ => false,
         }
     }
@@ -202,5 +310,88 @@ impl PartialEq for Value {
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_display_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── FutureRef identity equality (TODO 47) ───────────────────────────
+
+    #[test]
+    fn future_same_ref_is_equal() {
+        let handle = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let local = tokio::task::LocalSet::new();
+                local.run_until(async {
+                    let h = tokio::task::spawn_local(async { Ok(Value::Null) });
+                    FutureRef::new(h)
+                }).await
+            });
+        let a = Value::Future(handle.clone());
+        let b = Value::Future(handle);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn future_different_refs_not_equal() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let (f1, f2) = rt.block_on(async {
+            let local = tokio::task::LocalSet::new();
+            local.run_until(async {
+                let h1 = tokio::task::spawn_local(async { Ok(Value::Null) });
+                let h2 = tokio::task::spawn_local(async { Ok(Value::Null) });
+                (FutureRef::new(h1), FutureRef::new(h2))
+            }).await
+        });
+        assert_ne!(Value::Future(f1), Value::Future(f2));
+    }
+
+    // ── new_compiled_function (TODO 48) ─────────────────────────────────
+
+    #[test]
+    fn compiled_function_creates_function_value() {
+        let val = new_compiled_function(
+            "test_fn",
+            vec![],
+            vec![],
+            None,
+            |_args| Ok(Value::Int(42)),
+            Some(false),
+        );
+        assert_eq!(val.type_name(), "function");
+    }
+
+    #[test]
+    fn compiled_function_has_yielding_entry() {
+        let val = new_compiled_function(
+            "unyielding",
+            vec![],
+            vec![],
+            None,
+            |_args| Ok(Value::Null),
+            Some(false),
+        );
+        if let Value::Function(f) = &val {
+            assert_eq!(f.has_yielding_entry, Some(false));
+        } else {
+            panic!("expected Function");
+        }
+    }
+
+    #[test]
+    fn compiled_function_display_shows_name() {
+        let val = new_compiled_function(
+            "my_builtin",
+            vec![],
+            vec![],
+            None,
+            |_args| Ok(Value::Null),
+            Some(false),
+        );
+        assert_eq!(val.to_display_string(), "<fn:my_builtin>");
     }
 }

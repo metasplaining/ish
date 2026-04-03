@@ -105,6 +105,109 @@ pub fn audit_statement(
     AuditResult::Pass
 }
 
+/// Audit whether a function that performs async operations is declared `async`.
+///
+/// When the `async_annotation` feature is `required`, a function that contains
+/// `await` or `yield` must be declared with `async fn`.
+pub fn audit_async_annotation(
+    active_features: &HashMap<String, FeatureState>,
+    is_async: bool,
+    fn_name: &str,
+) -> AuditResult {
+    if let Some(feature) = active_features.get("async_annotation") {
+        if feature.annotation == super::standard::AnnotationDimension::Required && !is_async {
+            return AuditResult::Discrepancy(
+                DiscrepancyReport::new(format!(
+                    "Function '{}' performs async operations but is not declared 'async fn'",
+                    fn_name
+                ))
+                .with_feature("async_annotation")
+                .with_trail_entry("Active standard requires async_annotation"),
+            );
+        }
+    }
+    AuditResult::Pass
+}
+
+/// Audit whether an async function call is properly awaited.
+///
+/// When the `await_required` feature is `required`, calling an async function
+/// without `await` is a discrepancy.
+pub fn audit_await_required(
+    active_features: &HashMap<String, FeatureState>,
+    call_expr: &str,
+) -> AuditResult {
+    if let Some(feature) = active_features.get("await_required") {
+        if feature.annotation == super::standard::AnnotationDimension::Required {
+            return AuditResult::Discrepancy(
+                DiscrepancyReport::new(format!(
+                    "Async function call '{}' is not awaited (required by active standard)",
+                    call_expr
+                ))
+                .with_feature("await_required")
+                .with_trail_entry("Active standard requires await_required"),
+            );
+        }
+    }
+    AuditResult::Pass
+}
+
+/// Audit whether dropping a future without awaiting is allowed.
+///
+/// When the `future_drop` feature is `required`, dropping a `Value::Future`
+/// without awaiting it triggers a discrepancy.
+pub fn audit_future_drop(
+    active_features: &HashMap<String, FeatureState>,
+    context: &str,
+) -> AuditResult {
+    if let Some(feature) = active_features.get("future_drop") {
+        if feature.annotation == super::standard::AnnotationDimension::Required {
+            return AuditResult::Discrepancy(
+                DiscrepancyReport::new(format!(
+                    "Future dropped without being awaited: {}",
+                    context
+                ))
+                .with_feature("future_drop")
+                .with_trail_entry("Active standard requires future_drop"),
+            );
+        }
+    }
+    AuditResult::Pass
+}
+
+/// Audit whether a complex function or block guarantees cooperative yielding.
+///
+/// When the `guaranteed_yield` feature is `required`, a function/block that is
+/// both `complex` and `unyielding` is a discrepancy.
+pub fn audit_guaranteed_yield(
+    active_features: &HashMap<String, FeatureState>,
+    entries: &EntrySet,
+    item_name: &str,
+) -> AuditResult {
+    if let Some(feature) = active_features.get("guaranteed_yield") {
+        if feature.annotation == super::standard::AnnotationDimension::Required {
+            let is_complex = entries.get("Complexity")
+                .and_then(|e| e.params.get("value"))
+                .map_or(false, |v| v == "complex");
+            let is_unyielding = entries.get("Yielding")
+                .and_then(|e| e.params.get("value"))
+                .map_or(false, |v| v == "unyielding");
+
+            if is_complex && is_unyielding {
+                return AuditResult::Discrepancy(
+                    DiscrepancyReport::new(format!(
+                        "'{}' is complex and unyielding — guaranteed yield required",
+                        item_name
+                    ))
+                    .with_feature("guaranteed_yield")
+                    .with_trail_entry("Active standard requires guaranteed_yield for complex code"),
+                );
+            }
+        }
+    }
+    AuditResult::Pass
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
