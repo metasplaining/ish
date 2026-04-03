@@ -54,11 +54,12 @@ cd proto && bash ish-tests/run_all.sh  # Run acceptance tests (255 tests)
 
 | Crate | Purpose |
 |-------|---------|
+| `ish-core` | Shared types (`TypeAnnotation`) used by both `ish-ast` and `ish-runtime` |
 | `ish-ast` | AST node types, builder API, display formatting |
 | `ish-parser` | PEG parser (pest), AST builder, parser-matches-everything |
-| `ish-vm` | Tree-walking interpreter, GC-managed values, builtins, AST↔Value reflection, shell command execution |
+| `ish-vm` | Tree-walking interpreter, Environment, builtins, AST↔Value reflection, shell command execution |
 | `ish-stdlib` | Self-hosted analyzer, Rust generator, and standard library (all written as ish programs) |
-| `ish-runtime` | Minimal value type shared between interpreter and compiled `.so` files |
+| `ish-runtime` | Runtime types: Value, Shim, RuntimeError, ErrorCode, IshFunction. Compiled packages depend on this crate |
 | `ish-codegen` | Compilation driver: generates temp Cargo project → `cargo build` → loads `.so` |
 | `ish-shell` | Interactive REPL (Reedline), file execution, inline execution |
 

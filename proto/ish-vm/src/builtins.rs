@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use crate::environment::Environment;
-use crate::error::RuntimeError;
+use crate::error::{ErrorCode, RuntimeError};
 use crate::value::{self, *};
 
 /// Configuration for builtin output routing.
@@ -31,6 +31,7 @@ pub fn register_all_with_config(env: &Environment, config: &BuiltinConfig) {
     register_conversion(env);
     register_errors(env);
     register_ledger(env);
+    register_apply(env);
 }
 
 // ── Ledger query stubs ──────────────────────────────────────────────────────
@@ -55,10 +56,27 @@ fn register_ledger(env: &Environment) {
                 Err(RuntimeError::system_error(format!(
                     "{} must be intercepted by the interpreter",
                     n2
-                ), "E004"))
+                ), ErrorCode::TypeMismatch))
             }, Some(false)),
         );
     }
+}
+
+// ── Cross-boundary function call ────────────────────────────────────────────
+// apply(fn, args_list) calls fn with elements of args_list as arguments.
+// Like ledger builtins, the actual logic is intercepted in interpreter.rs
+// because it needs async VM access to call the target function.
+
+fn register_apply(env: &Environment) {
+    env.define(
+        "apply".into(),
+        new_compiled_function("apply", vec!["fn".into(), "args".into()], vec![], None, |_args| {
+            Err(RuntimeError::system_error(
+                "apply must be intercepted by the interpreter",
+                ErrorCode::TypeMismatch,
+            ))
+        }, Some(false)),
+    );
 }
 
 // ── I/O ─────────────────────────────────────────────────────────────────────
@@ -108,15 +126,15 @@ fn register_io(env: &Environment, config: &BuiltinConfig) {
         "read_file".into(),
         new_compiled_function("read_file", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("read_file expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("read_file expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::String(path) = &args[0] {
                 match std::fs::read_to_string(path.as_ref()) {
                     Ok(content) => Ok(Value::String(Rc::new(content))),
-                    Err(e) => Err(RuntimeError::system_error(format!("read_file error: {}", e), "E008")),
+                    Err(e) => Err(RuntimeError::system_error(format!("read_file error: {}", e), ErrorCode::IoError)),
                 }
             } else {
-                Err(RuntimeError::system_error("read_file expects a string path", "E004"))
+                Err(RuntimeError::system_error("read_file expects a string path", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -125,16 +143,16 @@ fn register_io(env: &Environment, config: &BuiltinConfig) {
         "write_file".into(),
         new_compiled_function("write_file", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("write_file expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("write_file expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::String(path), Value::String(content)) = (&args[0], &args[1]) {
                 match std::fs::write(path.as_ref(), content.as_ref()) {
                     Ok(()) => Ok(Value::Null),
-                    Err(e) => Err(RuntimeError::system_error(format!("write_file error: {}", e), "E008")),
+                    Err(e) => Err(RuntimeError::system_error(format!("write_file error: {}", e), ErrorCode::IoError)),
                 }
             } else {
                 Err(RuntimeError::system_error(
-                    "write_file expects (string path, string content)", "E004"))
+                    "write_file expects (string path, string content)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -147,7 +165,7 @@ fn register_strings(env: &Environment) {
         "str_concat".into(),
         new_compiled_function("str_concat", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("str_concat expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("str_concat expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             let a = args[0].to_display_string();
             let b = args[1].to_display_string();
@@ -159,12 +177,12 @@ fn register_strings(env: &Environment) {
         "str_length".into(),
         new_compiled_function("str_length", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("str_length expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("str_length expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::String(s) = &args[0] {
                 Ok(Value::Int(s.len() as i64))
             } else {
-                Err(RuntimeError::system_error("str_length expects a string", "E004"))
+                Err(RuntimeError::system_error("str_length expects a string", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -173,7 +191,7 @@ fn register_strings(env: &Environment) {
         "str_slice".into(),
         new_compiled_function("str_slice", vec![], vec![], None, |args| {
             if args.len() != 3 {
-                return Err(RuntimeError::system_error("str_slice expects 3 arguments", "E003"));
+                return Err(RuntimeError::system_error("str_slice expects 3 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::String(s), Value::Int(start), Value::Int(end)) =
                 (&args[0], &args[1], &args[2])
@@ -185,7 +203,7 @@ fn register_strings(env: &Environment) {
                 }
                 Ok(Value::String(Rc::new(s[start..end].to_string())))
             } else {
-                Err(RuntimeError::system_error("str_slice expects (string, int, int)", "E004"))
+                Err(RuntimeError::system_error("str_slice expects (string, int, int)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -194,12 +212,12 @@ fn register_strings(env: &Environment) {
         "str_contains".into(),
         new_compiled_function("str_contains", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("str_contains expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("str_contains expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::String(s), Value::String(substr)) = (&args[0], &args[1]) {
                 Ok(Value::Bool(s.contains(substr.as_ref())))
             } else {
-                Err(RuntimeError::system_error("str_contains expects (string, string)", "E004"))
+                Err(RuntimeError::system_error("str_contains expects (string, string)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -208,13 +226,13 @@ fn register_strings(env: &Environment) {
         "str_starts_with".into(),
         new_compiled_function("str_starts_with", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("str_starts_with expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("str_starts_with expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::String(s), Value::String(prefix)) = (&args[0], &args[1]) {
                 Ok(Value::Bool(s.starts_with(prefix.as_ref())))
             } else {
                 Err(RuntimeError::system_error(
-                    "str_starts_with expects (string, string)", "E004"))
+                    "str_starts_with expects (string, string)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -223,7 +241,7 @@ fn register_strings(env: &Environment) {
         "str_replace".into(),
         new_compiled_function("str_replace", vec![], vec![], None, |args| {
             if args.len() != 3 {
-                return Err(RuntimeError::system_error("str_replace expects 3 arguments", "E003"));
+                return Err(RuntimeError::system_error("str_replace expects 3 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::String(s), Value::String(from), Value::String(to)) =
                 (&args[0], &args[1], &args[2])
@@ -233,7 +251,7 @@ fn register_strings(env: &Environment) {
                 )))
             } else {
                 Err(RuntimeError::system_error(
-                    "str_replace expects (string, string, string)", "E004"))
+                    "str_replace expects (string, string, string)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -242,7 +260,7 @@ fn register_strings(env: &Environment) {
         "str_split".into(),
         new_compiled_function("str_split", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("str_split expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("str_split expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::String(s), Value::String(delim)) = (&args[0], &args[1]) {
                 let parts: Vec<Value> = s
@@ -251,7 +269,7 @@ fn register_strings(env: &Environment) {
                     .collect();
                 Ok(new_list(parts))
             } else {
-                Err(RuntimeError::system_error("str_split expects (string, string)", "E004"))
+                Err(RuntimeError::system_error("str_split expects (string, string)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -260,12 +278,12 @@ fn register_strings(env: &Environment) {
         "str_to_upper".into(),
         new_compiled_function("str_to_upper", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("str_to_upper expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("str_to_upper expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::String(s) = &args[0] {
                 Ok(Value::String(Rc::new(s.to_uppercase())))
             } else {
-                Err(RuntimeError::system_error("str_to_upper expects a string", "E004"))
+                Err(RuntimeError::system_error("str_to_upper expects a string", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -274,12 +292,12 @@ fn register_strings(env: &Environment) {
         "str_to_lower".into(),
         new_compiled_function("str_to_lower", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("str_to_lower expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("str_to_lower expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::String(s) = &args[0] {
                 Ok(Value::String(Rc::new(s.to_lowercase())))
             } else {
-                Err(RuntimeError::system_error("str_to_lower expects a string", "E004"))
+                Err(RuntimeError::system_error("str_to_lower expects a string", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -288,7 +306,7 @@ fn register_strings(env: &Environment) {
         "str_char_at".into(),
         new_compiled_function("str_char_at", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("str_char_at expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("str_char_at expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::String(s), Value::Int(i)) = (&args[0], &args[1]) {
                 let i = *i as usize;
@@ -298,7 +316,7 @@ fn register_strings(env: &Environment) {
                     Ok(Value::Null)
                 }
             } else {
-                Err(RuntimeError::system_error("str_char_at expects (string, int)", "E004"))
+                Err(RuntimeError::system_error("str_char_at expects (string, int)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -307,12 +325,12 @@ fn register_strings(env: &Environment) {
         "str_trim".into(),
         new_compiled_function("str_trim", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("str_trim expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("str_trim expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::String(s) = &args[0] {
                 Ok(Value::String(Rc::new(s.trim().to_string())))
             } else {
-                Err(RuntimeError::system_error("str_trim expects a string", "E004"))
+                Err(RuntimeError::system_error("str_trim expects a string", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -325,13 +343,13 @@ fn register_lists(env: &Environment) {
         "list_push".into(),
         new_compiled_function("list_push", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("list_push expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("list_push expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::List(list_ref) = &args[0] {
                 list_ref.borrow_mut().push(args[1].clone());
                 Ok(Value::Null)
             } else {
-                Err(RuntimeError::system_error("list_push expects a list as first argument", "E003"))
+                Err(RuntimeError::system_error("list_push expects a list as first argument", ErrorCode::ArgumentCountMismatch))
             }
         }, Some(false)),
     );
@@ -340,12 +358,12 @@ fn register_lists(env: &Environment) {
         "list_pop".into(),
         new_compiled_function("list_pop", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("list_pop expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("list_pop expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::List(list_ref) = &args[0] {
                 Ok(list_ref.borrow_mut().pop().unwrap_or(Value::Null))
             } else {
-                Err(RuntimeError::system_error("list_pop expects a list", "E004"))
+                Err(RuntimeError::system_error("list_pop expects a list", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -354,12 +372,12 @@ fn register_lists(env: &Environment) {
         "list_length".into(),
         new_compiled_function("list_length", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("list_length expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("list_length expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::List(list_ref) = &args[0] {
                 Ok(Value::Int(list_ref.borrow().len() as i64))
             } else {
-                Err(RuntimeError::system_error("list_length expects a list", "E004"))
+                Err(RuntimeError::system_error("list_length expects a list", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -368,7 +386,7 @@ fn register_lists(env: &Environment) {
         "list_get".into(),
         new_compiled_function("list_get", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("list_get expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("list_get expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::List(list_ref), Value::Int(i)) = (&args[0], &args[1]) {
                 let list = list_ref.borrow();
@@ -380,10 +398,10 @@ fn register_lists(env: &Environment) {
                         "index {} out of bounds (length {})",
                         i,
                         list.len()
-                    ), "E004"))
+                    ), ErrorCode::TypeMismatch))
                 }
             } else {
-                Err(RuntimeError::system_error("list_get expects (list, int)", "E004"))
+                Err(RuntimeError::system_error("list_get expects (list, int)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -392,7 +410,7 @@ fn register_lists(env: &Environment) {
         "list_set".into(),
         new_compiled_function("list_set", vec![], vec![], None, |args| {
             if args.len() != 3 {
-                return Err(RuntimeError::system_error("list_set expects 3 arguments", "E003"));
+                return Err(RuntimeError::system_error("list_set expects 3 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::List(list_ref), Value::Int(i)) = (&args[0], &args[1]) {
                 let mut list = list_ref.borrow_mut();
@@ -405,10 +423,10 @@ fn register_lists(env: &Environment) {
                         "index {} out of bounds (length {})",
                         i,
                         list.len()
-                    ), "E004"))
+                    ), ErrorCode::TypeMismatch))
                 }
             } else {
-                Err(RuntimeError::system_error("list_set expects (list, int, value)", "E004"))
+                Err(RuntimeError::system_error("list_set expects (list, int, value)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -417,7 +435,7 @@ fn register_lists(env: &Environment) {
         "list_slice".into(),
         new_compiled_function("list_slice", vec![], vec![], None, |args| {
             if args.len() != 3 {
-                return Err(RuntimeError::system_error("list_slice expects 3 arguments", "E003"));
+                return Err(RuntimeError::system_error("list_slice expects 3 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::List(list_ref), Value::Int(start), Value::Int(end)) =
                 (&args[0], &args[1], &args[2])
@@ -430,7 +448,7 @@ fn register_lists(env: &Environment) {
                 }
                 Ok(new_list(list[start..end].to_vec()))
             } else {
-                Err(RuntimeError::system_error("list_slice expects (list, int, int)", "E004"))
+                Err(RuntimeError::system_error("list_slice expects (list, int, int)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -439,14 +457,14 @@ fn register_lists(env: &Environment) {
         "list_join".into(),
         new_compiled_function("list_join", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("list_join expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("list_join expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::List(list_ref), Value::String(sep)) = (&args[0], &args[1]) {
                 let list = list_ref.borrow();
                 let strs: Vec<String> = list.iter().map(|v| v.to_display_string()).collect();
                 Ok(Value::String(Rc::new(strs.join(sep.as_ref()))))
             } else {
-                Err(RuntimeError::system_error("list_join expects (list, string)", "E004"))
+                Err(RuntimeError::system_error("list_join expects (list, string)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -459,7 +477,7 @@ fn register_objects(env: &Environment) {
         "obj_get".into(),
         new_compiled_function("obj_get", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("obj_get expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("obj_get expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
                 Ok(obj_ref
@@ -468,7 +486,7 @@ fn register_objects(env: &Environment) {
                     .cloned()
                     .unwrap_or(Value::Null))
             } else {
-                Err(RuntimeError::system_error("obj_get expects (object, string)", "E004"))
+                Err(RuntimeError::system_error("obj_get expects (object, string)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -477,7 +495,7 @@ fn register_objects(env: &Environment) {
         "obj_set".into(),
         new_compiled_function("obj_set", vec![], vec![], None, |args| {
             if args.len() != 3 {
-                return Err(RuntimeError::system_error("obj_set expects 3 arguments", "E003"));
+                return Err(RuntimeError::system_error("obj_set expects 3 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
                 obj_ref
@@ -485,7 +503,7 @@ fn register_objects(env: &Environment) {
                     .insert(key.as_ref().clone(), args[2].clone());
                 Ok(Value::Null)
             } else {
-                Err(RuntimeError::system_error("obj_set expects (object, string, value)", "E004"))
+                Err(RuntimeError::system_error("obj_set expects (object, string, value)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -494,12 +512,12 @@ fn register_objects(env: &Environment) {
         "obj_has".into(),
         new_compiled_function("obj_has", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("obj_has expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("obj_has expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
                 Ok(Value::Bool(obj_ref.borrow().contains_key(key.as_ref())))
             } else {
-                Err(RuntimeError::system_error("obj_has expects (object, string)", "E004"))
+                Err(RuntimeError::system_error("obj_has expects (object, string)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -508,7 +526,7 @@ fn register_objects(env: &Environment) {
         "obj_keys".into(),
         new_compiled_function("obj_keys", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("obj_keys expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("obj_keys expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::Object(obj_ref) = &args[0] {
                 let keys: Vec<Value> = obj_ref
@@ -518,7 +536,7 @@ fn register_objects(env: &Environment) {
                     .collect();
                 Ok(new_list(keys))
             } else {
-                Err(RuntimeError::system_error("obj_keys expects an object", "E004"))
+                Err(RuntimeError::system_error("obj_keys expects an object", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -527,13 +545,13 @@ fn register_objects(env: &Environment) {
         "obj_values".into(),
         new_compiled_function("obj_values", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("obj_values expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("obj_values expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::Object(obj_ref) = &args[0] {
                 let values: Vec<Value> = obj_ref.borrow().values().cloned().collect();
                 Ok(new_list(values))
             } else {
-                Err(RuntimeError::system_error("obj_values expects an object", "E004"))
+                Err(RuntimeError::system_error("obj_values expects an object", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -542,7 +560,7 @@ fn register_objects(env: &Environment) {
         "obj_remove".into(),
         new_compiled_function("obj_remove", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("obj_remove expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("obj_remove expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
                 let removed = obj_ref
@@ -551,7 +569,7 @@ fn register_objects(env: &Environment) {
                     .unwrap_or(Value::Null);
                 Ok(removed)
             } else {
-                Err(RuntimeError::system_error("obj_remove expects (object, string)", "E004"))
+                Err(RuntimeError::system_error("obj_remove expects (object, string)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -564,7 +582,7 @@ fn register_types(env: &Environment) {
         "type_of".into(),
         new_compiled_function("type_of", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("type_of expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("type_of expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             Ok(Value::String(Rc::new(args[0].type_name().to_string())))
         }, Some(false)),
@@ -574,12 +592,12 @@ fn register_types(env: &Environment) {
         "is_type".into(),
         new_compiled_function("is_type", vec![], vec![], None, |args| {
             if args.len() != 2 {
-                return Err(RuntimeError::system_error("is_type expects 2 arguments", "E003"));
+                return Err(RuntimeError::system_error("is_type expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::String(type_name) = &args[1] {
                 Ok(Value::Bool(args[0].type_name() == type_name.as_ref()))
             } else {
-                Err(RuntimeError::system_error("is_type expects (value, string)", "E004"))
+                Err(RuntimeError::system_error("is_type expects (value, string)", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -592,7 +610,7 @@ fn register_conversion(env: &Environment) {
         "to_string".into(),
         new_compiled_function("to_string", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("to_string expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("to_string expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             Ok(Value::String(Rc::new(args[0].to_display_string())))
         }, Some(false)),
@@ -602,7 +620,7 @@ fn register_conversion(env: &Environment) {
         "to_int".into(),
         new_compiled_function("to_int", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("to_int expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("to_int expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             match &args[0] {
                 Value::Int(n) => Ok(Value::Int(*n)),
@@ -612,13 +630,13 @@ fn register_conversion(env: &Environment) {
                     Err(_) => Err(RuntimeError::system_error(format!(
                         "cannot convert '{}' to int",
                         s
-                    ), "E004")),
+                    ), ErrorCode::TypeMismatch)),
                 },
                 Value::Bool(b) => Ok(Value::Int(if *b { 1 } else { 0 })),
                 _ => Err(RuntimeError::system_error(format!(
                     "cannot convert {} to int",
                     args[0].type_name()
-                ), "E004")),
+                ), ErrorCode::TypeMismatch)),
             }
         }, Some(false)),
     );
@@ -627,7 +645,7 @@ fn register_conversion(env: &Environment) {
         "to_float".into(),
         new_compiled_function("to_float", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("to_float expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("to_float expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             match &args[0] {
                 Value::Float(f) => Ok(Value::Float(*f)),
@@ -637,12 +655,12 @@ fn register_conversion(env: &Environment) {
                     Err(_) => Err(RuntimeError::system_error(format!(
                         "cannot convert '{}' to float",
                         s
-                    ), "E004")),
+                    ), ErrorCode::TypeMismatch)),
                 },
                 _ => Err(RuntimeError::system_error(format!(
                     "cannot convert {} to float",
                     args[0].type_name()
-                ), "E004")),
+                ), ErrorCode::TypeMismatch)),
             }
         }, Some(false)),
     );
@@ -651,7 +669,7 @@ fn register_conversion(env: &Environment) {
         "char".into(),
         new_compiled_function("char", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("char expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("char expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             match &args[0] {
                 Value::String(s) => {
@@ -660,10 +678,10 @@ fn register_conversion(env: &Environment) {
                         if chars.next().is_none() {
                             Ok(Value::Char(c))
                         } else {
-                            Err(RuntimeError::system_error("char expects a single-character string", "E004"))
+                            Err(RuntimeError::system_error("char expects a single-character string", ErrorCode::TypeMismatch))
                         }
                     } else {
-                        Err(RuntimeError::system_error("char expects a non-empty string", "E004"))
+                        Err(RuntimeError::system_error("char expects a non-empty string", ErrorCode::TypeMismatch))
                     }
                 }
                 Value::Int(n) => {
@@ -673,14 +691,14 @@ fn register_conversion(env: &Environment) {
                         None => Err(RuntimeError::system_error(format!(
                             "invalid Unicode code point: {}",
                             n
-                        ), "E004")),
+                        ), ErrorCode::TypeMismatch)),
                     }
                 }
                 Value::Char(c) => Ok(Value::Char(*c)),
                 _ => Err(RuntimeError::system_error(format!(
                     "cannot convert {} to char",
                     args[0].type_name()
-                ), "E004")),
+                ), ErrorCode::TypeMismatch)),
             }
         }, Some(false)),
     );
@@ -695,7 +713,7 @@ fn register_errors(env: &Environment) {
         "is_error".into(),
         new_compiled_function("is_error", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("is_error expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("is_error expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             let result = if let Value::Object(ref obj_ref) = args[0] {
                 let map = obj_ref.borrow();
@@ -712,13 +730,13 @@ fn register_errors(env: &Environment) {
         "error_message".into(),
         new_compiled_function("error_message", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("error_message expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("error_message expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::Object(ref obj_ref) = args[0] {
                 let map = obj_ref.borrow();
                 Ok(map.get("message").cloned().unwrap_or(Value::Null))
             } else {
-                Err(RuntimeError::system_error("error_message expects an error object", "E004"))
+                Err(RuntimeError::system_error("error_message expects an error object", ErrorCode::TypeMismatch))
             }
         }, Some(false)),
     );
@@ -728,7 +746,7 @@ fn register_errors(env: &Environment) {
         "error_code".into(),
         new_compiled_function("error_code", vec![], vec![], None, |args| {
             if args.len() != 1 {
-                return Err(RuntimeError::system_error("error_code expects 1 argument", "E003"));
+                return Err(RuntimeError::system_error("error_code expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
             if let Value::Object(ref obj_ref) = args[0] {
                 let map = obj_ref.borrow();
@@ -745,6 +763,8 @@ fn register_errors(env: &Environment) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use ish_ast::*;
     use ish_ast::builder::ProgramBuilder;
     use crate::interpreter::IshVm;
@@ -758,8 +778,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::String(Rc::new("int".into())));
     }
 
@@ -772,8 +792,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(5));
     }
 
@@ -801,8 +821,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(4));
     }
 
@@ -830,8 +850,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(20));
     }
 
@@ -845,8 +865,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::String(Rc::new("hello world".into())));
     }
 
@@ -859,8 +879,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::String(Rc::new("42".into())));
     }
 }

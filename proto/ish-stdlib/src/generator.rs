@@ -10,14 +10,16 @@
 // - Function calls
 // - Return
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use ish_ast::*;
 use ish_ast::builder::ProgramBuilder;
 use ish_vm::interpreter::IshVm;
 
 /// Register the generator functions into the VM's global environment.
-pub async fn register_generator(vm: &mut IshVm) {
+pub async fn register_generator(vm: &Rc<RefCell<IshVm>>) {
     let generator_program = build_generator();
-    vm.run(&generator_program).await.unwrap();
+    IshVm::run(vm, &generator_program).await.unwrap();
 }
 
 /// Build the Rust generator as an ish program (AST).
@@ -452,15 +454,15 @@ mod tests {
     use ish_vm::value::Value;
     use ish_vm::reflection::program_to_value;
 
-    async fn make_vm() -> IshVm {
-        let mut vm = IshVm::new();
-        crate::load_all(&mut vm).await;
+    async fn make_vm() -> Rc<RefCell<IshVm>> {
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        crate::load_all(&vm).await;
         vm
     }
 
     #[tokio::test]
     async fn test_generate_simple_add_function() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
 
         // Build: fn add(a, b) { return a + b; }
         let test_program = ProgramBuilder::new()
@@ -476,7 +478,7 @@ mod tests {
         let test_ast = program_to_value(&test_program);
 
         // Get the function_decl node
-        vm.global_env.define("test_ast".to_string(), test_ast);
+        vm.borrow().global_env.define("test_ast".to_string(), test_ast);
 
         let gen_prog = Program::new(vec![
             Statement::var_decl("stmts", Expression::call(
@@ -493,7 +495,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&gen_prog).await.unwrap();
+        let result = IshVm::run(&vm, &gen_prog).await.unwrap();
         if let Value::String(s) = &result {
             let code = s.as_ref();
             assert!(code.contains("fn add(a: i64, b: i64) -> i64"), "got: {}", code);
@@ -505,7 +507,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_factorial() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
 
         let test_program = ProgramBuilder::new()
             .function("factorial", &["n"], |b| {
@@ -529,7 +531,7 @@ mod tests {
             .build();
 
         let test_ast = program_to_value(&test_program);
-        vm.global_env.define("test_ast".to_string(), test_ast);
+        vm.borrow().global_env.define("test_ast".to_string(), test_ast);
 
         let gen_prog = Program::new(vec![
             Statement::var_decl("stmts", Expression::call(
@@ -546,7 +548,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&gen_prog).await.unwrap();
+        let result = IshVm::run(&vm, &gen_prog).await.unwrap();
         if let Value::String(s) = &result {
             let code = s.as_ref();
             assert!(code.contains("fn factorial(n: i64) -> i64"), "got: {}", code);
@@ -560,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_program_with_multiple_functions() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
 
         let test_program = ProgramBuilder::new()
             .function("add", &["a", "b"], |b| {
@@ -573,7 +575,7 @@ mod tests {
             .build();
 
         let test_ast = program_to_value(&test_program);
-        vm.global_env.define("test_ast".to_string(), test_ast);
+        vm.borrow().global_env.define("test_ast".to_string(), test_ast);
 
         let gen_prog = Program::new(vec![
             Statement::expr_stmt(Expression::call(
@@ -582,7 +584,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&gen_prog).await.unwrap();
+        let result = IshVm::run(&vm, &gen_prog).await.unwrap();
         if let Value::String(s) = &result {
             let code = s.as_ref();
             assert!(code.contains("fn add("), "got: {}", code);

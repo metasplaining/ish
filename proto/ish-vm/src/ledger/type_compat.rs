@@ -440,8 +440,7 @@ mod tests {
             params: vec!["a".into(), "b".into()],
             param_types: vec![None, None],
             return_type: None,
-            implementation: crate::value::FunctionImplementation::Interpreted(ish_ast::Statement::Block { statements: vec![] }),
-            closure_env: crate::environment::Environment::new(),
+            shim: std::rc::Rc::new(|_args: &[Value]| Ok(Value::Null)),
             is_async: false,
             has_yielding_entry: None,
         }));
@@ -459,8 +458,7 @@ mod tests {
             params: vec!["a".into(), "b".into()],
             param_types: vec![None, None],
             return_type: None,
-            implementation: crate::value::FunctionImplementation::Interpreted(ish_ast::Statement::Block { statements: vec![] }),
-            closure_env: crate::environment::Environment::new(),
+            shim: std::rc::Rc::new(|_args: &[Value]| Ok(Value::Null)),
             is_async: false,
             has_yielding_entry: None,
         }));

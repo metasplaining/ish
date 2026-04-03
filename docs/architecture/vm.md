@@ -3,73 +3,21 @@ title: "Architecture: ish-vm"
 category: architecture
 audience: [all]
 status: draft
-last-verified: 2026-03-31
-depends-on: [docs/architecture/overview.md, docs/architecture/ast.md, docs/spec/concurrency.md]
+last-verified: 2026-04-02
+depends-on: [docs/architecture/overview.md, docs/architecture/ast.md, docs/architecture/runtime.md, docs/spec/concurrency.md]
 ---
 
 # ish-vm
 
 **Source:** `proto/ish-vm/src/`
 
-Tree-walking interpreter executing AST programs.
+Tree-walking interpreter executing AST programs. Value types (`Value`, `Shim`, `RuntimeError`, `ErrorCode`, `IshFunction`) are defined in `ish-runtime` and re-exported by this crate.
 
 ---
 
-## Value System (`value.rs`)
+## Value System
 
-```rust
-pub enum Value {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    String(Rc<String>),
-    Char(char),
-    Null,
-    Object(ObjectRef),              // Gc<GcCell<HashMap<String, Value>>>
-    List(ListRef),                  // Gc<GcCell<Vec<Value>>>
-    Function(FunctionRef),          // Gc<IshFunction>
-    Future(FutureRef),              // Rc<RefCell<Option<JoinHandle>>>
-}
-```
-
-- **GC-managed:** Objects, Lists, and Functions use the `gc` crate (v0.5)
-- **Strings** use `Rc<String>` (cheap cloning, no GC overhead for immutable data)
-- **`PartialEq`** supports cross-type Int/Float comparison, Char equality, and Future identity equality (`Rc::ptr_eq`)
-- **`is_truthy()`** — false for `false`, `0`, `0.0`, `Null`; true for everything else (including `Char`)
-- **No `BuiltinFunction` variant** — all builtins are `Function` values with compiled implementations
-
-### Function Implementation
-
-Functions use a `FunctionImplementation` enum to distinguish interpreted from compiled execution:
-
-```rust
-pub enum FunctionImplementation {
-    Interpreted(Statement),       // Tree-walking via exec_statement
-    Compiled(Shim),               // Synchronous shim function
-}
-
-pub type Shim = Rc<dyn Fn(&[Value]) -> Result<Value, RuntimeError>>;
-```
-
-`IshFunction` carries the implementation along with metadata:
-
-```rust
-pub struct IshFunction {
-    pub name: Option<String>,
-    pub params: Vec<String>,
-    pub param_types: Vec<Option<TypeAnnotation>>,
-    pub return_type: Option<TypeAnnotation>,
-    pub implementation: FunctionImplementation,
-    pub closure_env: Environment,
-    pub is_async: bool,
-    pub has_yielding_entry: Option<bool>,  // None=ambiguous, Some(true)=yielding, Some(false)=unyielding
-}
-```
-
-**Shim types** (behavioral, not structural — all use the same `Shim` type):
-- **Unyielding shims** (`len`, `type_of`, etc.) — call logic directly, return a plain `Value`.
-- **Yielding shims** — spawn work via `spawn_local`, return `Value::Future`.
-- **Parallel shims** (`print`, `read_file`, etc.) — marshal args to `Send`-safe form, `spawn_blocking` + `spawn_local` bridge, return `Value::Future`.
+See [runtime.md](runtime.md) for the full `Value` enum, `Shim` type alias, `IshFunction` struct, and `RuntimeError`/`ErrorCode` types. This crate re-exports them for backward compatibility.
 
 ---
 
@@ -108,12 +56,22 @@ pub struct IshVm {
 }
 ```
 
+### Rc<RefCell<IshVm>> Pattern
+
+The VM is accessed via `Rc<RefCell<IshVm>>` throughout the interpreter, builtins, and shell entry points. Methods are associated functions that take `vm: &Rc<RefCell<IshVm>>` rather than `&mut self`. The key discipline: borrow mutably only for the specific mutation, then release before any call that might invoke a shim (which may re-enter the VM).
+
 | Method | Description |
 |--------|-------------|
 | `IshVm::new()` | Creates VM, registers all builtins + AST factory functions |
-| `vm.run(&Program)` | Execute a program, return last expression's value |
-| `vm.eval_expression(&Expression, &Environment)` | Evaluate a single expression |
-| `vm.call_function(&Value, &[Value])` | Call a function value with arguments |
+| `IshVm::run(vm, &Program)` | Execute a program, return last expression's value |
+| `IshVm::eval_expression(vm, &Expression, &Environment)` | Evaluate a single expression |
+| `IshVm::call_function(vm, &Value, &[Value])` | Call a function value with arguments |
+
+### Shim-Only Function Dispatch
+
+All functions — builtins and interpreted — are called uniformly via `(func.shim)(args)`. There is no dispatch on implementation variant. When the interpreter declares an interpreted function (`Statement::FunctionDecl`, `Expression::FunctionExpr`), it creates a shim closure that captures the body statement, closure environment, and `Rc<RefCell<IshVm>>`. The shim, when called, borrows the VM, creates a child scope from the captured environment, binds parameters, and executes the body.
+
+Arity checking, parameter type auditing, and return type auditing still occur around shim invocation in `call_function`.
 
 **Control flow** uses `ControlFlow::None`, `ControlFlow::Return(Value)`, `ControlFlow::ExprValue(Value)`, `ControlFlow::Throw(Value)`.
 
@@ -164,7 +122,7 @@ The throw audit only adds `@Error` entries. Other error classifications (`CodedE
 
 ## Builtins (`builtins.rs`)
 
-49 Rust-native functions registered at VM startup as `IshFunction` values with `Compiled(Shim)` implementations. All builtins are `Value::Function` — there is no separate `BuiltinFunction` type. To an outside observer, builtins are indistinguishable from user-defined functions.
+49 Rust-native functions registered at VM startup as `IshFunction` values with compiled shims. All builtins are `Value::Function` — there is no separate `BuiltinFunction` type. To an outside observer, builtins are indistinguishable from user-defined functions.
 
 | Group | Functions | Yielding |
 |-------|-----------|----------|
@@ -177,11 +135,11 @@ The throw audit only adds `@Error` entries. Other error classifications (`CodedE
 | Errors | `is_error`, `error_message`, `error_code` | `Some(false)` |
 | Ledger | `active_standard`, `feature_state`, `has_standard`, `has_entry_type` | `Some(false)` |
 
-**Unified dispatch:** `call_function_inner` handles all functions via a single `Value::Function` match arm. Arity checking and parameter type auditing apply uniformly to builtins and user-defined functions. The match then dispatches on `FunctionImplementation::Interpreted` vs `Compiled`.
+**Unified dispatch:** `call_function` handles all functions via a single `Value::Function` match arm. Arity checking and parameter type auditing apply uniformly to builtins and user-defined functions. All functions are invoked via `(func.shim)(args)` — there is no dispatch on implementation variant.
 
-**Ledger builtins** need `&mut IshVm` access (they query `self.ledger`), so they are intercepted by name in `call_function_inner` *before* the implementation dispatch. Stub shims are registered so the names are callable and metadata is available; reaching the stub body is an error.
+**Ledger builtins** need VM access (they query `self.ledger`), so they are intercepted by name in `call_function` *before* the shim invocation. Stub shims are registered so the names are callable and metadata is available; reaching the stub body is an error.
 
-**Implied await:** When a `Compiled` shim returns `Value::Future` from a bare function call (not under `await` or `spawn`), the `FunctionCall` handler checks the `await_required` feature. If not active, the future is immediately awaited (implied await). If active, the future is returned as-is. This makes parallel builtins backward-compatible at low assurance.
+**Implied await:** When a shim returns `Value::Future` from a bare function call (not under `await` or `spawn`), the `FunctionCall` handler checks the `await_required` feature. If not active, the future is immediately awaited (implied await). If active, the future is returned as-is. This makes parallel builtins backward-compatible at low assurance.
 
 **I/O completion:** Parallel shim futures do not resolve until the I/O operation is actually complete. In interactive mode, the shim sends output plus a `oneshot` acknowledgment channel; the future resolves only after the shell confirms the write.
 
@@ -247,14 +205,9 @@ When a `@standard[name]` annotation is encountered, the interpreter pushes the n
 
 ---
 
-## Error Handling (`error.rs`)
+## Error Handling
 
-`RuntimeError` type used throughout the VM. Contains a `message` field and an optional `thrown_value: Option<Value>` that preserves the original value when a throw crosses a function boundary.
-
-- `RuntimeError::new(message)` — create a runtime error with a message
-- `RuntimeError::thrown(value)` — create a runtime error from a thrown value, preserving it for the caller's try/catch
-
-The error hierarchy uses a structural model: only `@Error` is a predefined entry type. `CodedError`, `SystemError`, `TypeError`, and other categories are ordinary ish types defined structurally. See [docs/spec/errors.md](../spec/errors.md).
+`RuntimeError` and `ErrorCode` are defined in `ish-runtime` (see [runtime.md](runtime.md)). The VM uses `ErrorCode` variants for all system error construction. The error hierarchy uses a structural model: only `@Error` is a predefined entry type. `CodedError`, `SystemError`, `TypeError`, and other categories are ordinary ish types defined structurally. See [docs/spec/errors.md](../spec/errors.md).
 
 ---
 

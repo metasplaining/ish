@@ -6,15 +6,17 @@
 // 2. Return path check: verify functions end with a return
 // 3. Constant folding annotation: identify binary ops on literals
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use ish_ast::*;
 use ish_ast::builder::ProgramBuilder;
 use ish_vm::interpreter::IshVm;
 
 /// Register the analyzer function into the VM's global environment.
-pub async fn register_analyzer(vm: &mut IshVm) {
+pub async fn register_analyzer(vm: &Rc<RefCell<IshVm>>) {
     let analyzer_program = build_analyzer();
     // Execute the program to define the functions
-    vm.run(&analyzer_program).await.unwrap();
+    IshVm::run(vm, &analyzer_program).await.unwrap();
 }
 
 /// Build the analyzer as an ish program (AST).
@@ -465,15 +467,15 @@ mod tests {
     use ish_vm::reflection::program_to_value;
     use std::rc::Rc;
 
-    async fn make_vm() -> IshVm {
-        let mut vm = IshVm::new();
-        crate::load_all(&mut vm).await;
+    async fn make_vm() -> Rc<RefCell<IshVm>> {
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        crate::load_all(&vm).await;
         vm
     }
 
     #[tokio::test]
     async fn test_analyzer_detects_undeclared_variable() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
 
         // Build a test program that references an undeclared variable
         let test_program = ProgramBuilder::new()
@@ -500,7 +502,7 @@ mod tests {
             .build();
 
         // Set the test_ast in the environment
-        vm.global_env.define("test_ast".to_string(), test_ast);
+        vm.borrow().global_env.define("test_ast".to_string(), test_ast);
 
         // Run analyze(test_ast)
         let call_prog = Program::new(vec![
@@ -510,7 +512,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&call_prog).await.unwrap();
+        let result = IshVm::run(&vm, &call_prog).await.unwrap();
 
         // Check that warnings contain "undeclared variable: b"
         if let Value::Object(ref obj_ref) = result {
@@ -531,7 +533,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyzer_no_warnings_for_valid_program() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
 
         let test_program = ProgramBuilder::new()
             .var_decl("x", Expression::int(10))
@@ -545,7 +547,7 @@ mod tests {
             .build();
 
         let test_ast = program_to_value(&test_program);
-        vm.global_env.define("test_ast".to_string(), test_ast);
+        vm.borrow().global_env.define("test_ast".to_string(), test_ast);
 
         let call_prog = Program::new(vec![
             Statement::expr_stmt(Expression::call(
@@ -554,7 +556,7 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&call_prog).await.unwrap();
+        let result = IshVm::run(&vm, &call_prog).await.unwrap();
 
         if let Value::Object(ref obj_ref) = result {
             let map = obj_ref.borrow();
@@ -572,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_returns() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
 
         // A function with return
         let test_program = ProgramBuilder::new()
@@ -582,7 +584,7 @@ mod tests {
             .build();
 
         let test_ast = program_to_value(&test_program);
-        vm.global_env.define("test_ast".to_string(), test_ast);
+        vm.borrow().global_env.define("test_ast".to_string(), test_ast);
 
         // Get the function_decl node and check its body
         let check_prog = Program::new(vec![
@@ -604,18 +606,18 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&check_prog).await.unwrap();
+        let result = IshVm::run(&vm, &check_prog).await.unwrap();
         assert_eq!(result, Value::Bool(true));
     }
 
     #[tokio::test]
     async fn test_is_constant_expr() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
 
         // Build a constant expression: 2 + 3
         let const_expr = Expression::binary(BinaryOperator::Add, Expression::int(2), Expression::int(3));
         let const_value = ish_vm::reflection::expr_to_value(&const_expr);
-        vm.global_env.define("test_expr".to_string(), const_value);
+        vm.borrow().global_env.define("test_expr".to_string(), const_value);
 
         let check_prog = Program::new(vec![
             Statement::expr_stmt(Expression::call(
@@ -624,13 +626,13 @@ mod tests {
             )),
         ]);
 
-        let result = vm.run(&check_prog).await.unwrap();
+        let result = IshVm::run(&vm, &check_prog).await.unwrap();
         assert_eq!(result, Value::Bool(true));
 
         // Non-constant: x + 3
         let non_const_expr = Expression::binary(BinaryOperator::Add, Expression::ident("x"), Expression::int(3));
         let non_const_value = ish_vm::reflection::expr_to_value(&non_const_expr);
-        vm.global_env.define("test_expr2".to_string(), non_const_value);
+        vm.borrow().global_env.define("test_expr2".to_string(), non_const_value);
 
         let check_prog2 = Program::new(vec![
             Statement::expr_stmt(Expression::call(
@@ -639,7 +641,7 @@ mod tests {
             )),
         ]);
 
-        let result2 = vm.run(&check_prog2).await.unwrap();
+        let result2 = IshVm::run(&vm, &check_prog2).await.unwrap();
         assert_eq!(result2, Value::Bool(false));
     }
 }

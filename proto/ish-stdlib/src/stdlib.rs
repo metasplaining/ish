@@ -1,14 +1,16 @@
 // Standard library functions written as ish programs.
 // Each function is registered into the VM by running its AST.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use ish_ast::*;
 use ish_ast::builder::ProgramBuilder;
 use ish_vm::interpreter::IshVm;
 
 /// Register all stdlib functions into the VM.
-pub async fn register_stdlib(vm: &mut IshVm) {
+pub async fn register_stdlib(vm: &Rc<RefCell<IshVm>>) {
     let program = build_stdlib();
-    vm.run(&program).await.unwrap();
+    IshVm::run(vm, &program).await.unwrap();
 }
 
 fn build_stdlib() -> Program {
@@ -158,59 +160,59 @@ mod tests {
     use super::*;
     use ish_vm::value::Value;
 
-    async fn make_vm() -> IshVm {
-        let mut vm = IshVm::new();
-        crate::load_all(&mut vm).await;
+    async fn make_vm() -> Rc<RefCell<IshVm>> {
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        crate::load_all(&vm).await;
         vm
     }
 
     #[tokio::test]
     async fn test_abs() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
         let prog = Program::new(vec![
             Statement::expr_stmt(Expression::call(Expression::ident("abs"), vec![Expression::int(-5)])),
         ]);
-        let result = vm.run(&prog).await.unwrap();
+        let result = IshVm::run(&vm, &prog).await.unwrap();
         assert_eq!(result, Value::Int(5));
     }
 
     #[tokio::test]
     async fn test_max_min() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
         let prog = Program::new(vec![
             Statement::var_decl("a", Expression::call(Expression::ident("max"), vec![Expression::int(3), Expression::int(7)])),
             Statement::var_decl("b", Expression::call(Expression::ident("min"), vec![Expression::int(3), Expression::int(7)])),
             Statement::expr_stmt(Expression::binary(BinaryOperator::Add, Expression::ident("a"), Expression::ident("b"))),
         ]);
-        let result = vm.run(&prog).await.unwrap();
+        let result = IshVm::run(&vm, &prog).await.unwrap();
         assert_eq!(result, Value::Int(10)); // 7 + 3
     }
 
     #[tokio::test]
     async fn test_range() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
         let prog = Program::new(vec![
             Statement::var_decl("r", Expression::call(Expression::ident("range"), vec![Expression::int(5)])),
             Statement::expr_stmt(Expression::call(Expression::ident("list_length"), vec![Expression::ident("r")])),
         ]);
-        let result = vm.run(&prog).await.unwrap();
+        let result = IshVm::run(&vm, &prog).await.unwrap();
         assert_eq!(result, Value::Int(5));
     }
 
     #[tokio::test]
     async fn test_sum() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
         let prog = Program::new(vec![
             Statement::var_decl("r", Expression::call(Expression::ident("range"), vec![Expression::int(5)])),
             Statement::expr_stmt(Expression::call(Expression::ident("sum"), vec![Expression::ident("r")])),
         ]);
-        let result = vm.run(&prog).await.unwrap();
+        let result = IshVm::run(&vm, &prog).await.unwrap();
         assert_eq!(result, Value::Int(10)); // 0+1+2+3+4
     }
 
     #[tokio::test]
     async fn test_assert_eq_pass() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
         let prog = Program::new(vec![
             Statement::expr_stmt(Expression::call(Expression::ident("assert_eq"), vec![
                 Expression::int(42),
@@ -218,13 +220,13 @@ mod tests {
                 Expression::string("should be equal"),
             ])),
         ]);
-        let result = vm.run(&prog).await.unwrap();
+        let result = IshVm::run(&vm, &prog).await.unwrap();
         assert_eq!(result, Value::Bool(true));
     }
 
     #[tokio::test]
     async fn test_map_and_filter() {
-        let mut vm = make_vm().await;
+        let vm = make_vm().await;
 
         // double = lambda(x) => x * 2
         // result = sum(map(range(4), double))  => sum([0,2,4,6]) = 12
@@ -243,7 +245,7 @@ mod tests {
             ])),
             Statement::expr_stmt(Expression::call(Expression::ident("sum"), vec![Expression::ident("mapped")])),
         ]);
-        let result = vm.run(&prog).await.unwrap();
+        let result = IshVm::run(&vm, &prog).await.unwrap();
         assert_eq!(result, Value::Int(12));
     }
 }

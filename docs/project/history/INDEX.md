@@ -17,6 +17,8 @@ Entries are named `<isodate>-<topic>` for chronological sorting. Each entry is e
 
 | Date | Topic | Location |
 |------|-------|----------|
+| 2026-04-03 | Stubbed analyzer and yielding/unyielding function refactoring | [2026-04-03-stubbed-analyzer/](2026-04-03-stubbed-analyzer/summary.md) |
+| 2026-04-02 | Runtime extraction | [2026-04-02-runtime-extraction/](2026-04-02-runtime-extraction/summary.md) |
 | 2026-04-01 | Concurrency correctness fixes | [2026-04-01-concurrency-correctness/](2026-04-01-concurrency-correctness/summary.md) |
 | 2026-03-23 | Concurrency design | [2026-03-23-concurrency/](2026-03-23-concurrency/summary.md) |
 | 2026-03-20 | Implementation audit — types, errors, and assurance ledger | [2026-03-20-implementation-audit-types-errors-ledger/](2026-03-20-implementation-audit-types-errors-ledger/summary.md) |

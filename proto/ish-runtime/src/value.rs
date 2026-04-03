@@ -4,8 +4,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
-use ish_ast::Statement;
-use crate::environment::Environment;
 use crate::error::RuntimeError;
 
 /// Thread-local set of future IDs that have been spawned but not awaited.
@@ -78,36 +76,17 @@ pub fn new_list(items: Vec<Value>) -> Value {
 /// Synchronous shim function: receives validated args, returns a Value (which may be Future).
 pub type Shim = Rc<dyn Fn(&[Value]) -> Result<Value, RuntimeError>>;
 
-/// How a function is executed.
-#[derive(Clone)]
-pub enum FunctionImplementation {
-    /// Tree-walking interpreted execution.
-    Interpreted(Statement),
-    /// Synchronous compiled shim dispatch.
-    Compiled(Shim),
-}
-
-impl fmt::Debug for FunctionImplementation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FunctionImplementation::Interpreted(_) => write!(f, "Interpreted(...)"),
-            FunctionImplementation::Compiled(_) => write!(f, "Compiled(...)"),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Trace, Finalize)]
+#[derive(Clone, Trace, Finalize)]
 pub struct IshFunction {
     pub name: Option<String>,
     #[unsafe_ignore_trace]
     pub params: Vec<String>,
     #[unsafe_ignore_trace]
-    pub param_types: Vec<Option<ish_ast::TypeAnnotation>>,
+    pub param_types: Vec<Option<ish_core::TypeAnnotation>>,
     #[unsafe_ignore_trace]
-    pub return_type: Option<ish_ast::TypeAnnotation>,
+    pub return_type: Option<ish_core::TypeAnnotation>,
     #[unsafe_ignore_trace]
-    pub implementation: FunctionImplementation,
-    pub closure_env: Environment,
+    pub shim: Shim,
     #[unsafe_ignore_trace]
     pub is_async: bool,
     /// Yielding classification: Some(true) = yielding, Some(false) = unyielding, None = unclassified.
@@ -115,35 +94,25 @@ pub struct IshFunction {
     pub has_yielding_entry: Option<bool>,
 }
 
-pub type FunctionRef = Gc<IshFunction>;
-
-pub fn new_function(
-    name: Option<String>,
-    params: Vec<String>,
-    param_types: Vec<Option<ish_ast::TypeAnnotation>>,
-    return_type: Option<ish_ast::TypeAnnotation>,
-    body: Statement,
-    closure_env: Environment,
-    is_async: bool,
-) -> Value {
-    Value::Function(Gc::new(IshFunction {
-        name,
-        params,
-        param_types,
-        return_type,
-        implementation: FunctionImplementation::Interpreted(body),
-        closure_env,
-        is_async,
-        has_yielding_entry: None,
-    }))
+impl fmt::Debug for IshFunction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IshFunction")
+            .field("name", &self.name)
+            .field("params", &self.params)
+            .field("is_async", &self.is_async)
+            .field("has_yielding_entry", &self.has_yielding_entry)
+            .finish()
+    }
 }
+
+pub type FunctionRef = Gc<IshFunction>;
 
 /// Create a compiled (shim-based) function value.
 pub fn new_compiled_function(
     name: impl Into<String>,
     params: Vec<String>,
-    param_types: Vec<Option<ish_ast::TypeAnnotation>>,
-    return_type: Option<ish_ast::TypeAnnotation>,
+    param_types: Vec<Option<ish_core::TypeAnnotation>>,
+    return_type: Option<ish_core::TypeAnnotation>,
     shim: impl Fn(&[Value]) -> Result<Value, RuntimeError> + 'static,
     has_yielding_entry: Option<bool>,
 ) -> Value {
@@ -152,8 +121,7 @@ pub fn new_compiled_function(
         params,
         param_types,
         return_type,
-        implementation: FunctionImplementation::Compiled(Rc::new(shim)),
-        closure_env: Environment::new(),
+        shim: Rc::new(shim),
         is_async: false,
         has_yielding_entry,
     }))

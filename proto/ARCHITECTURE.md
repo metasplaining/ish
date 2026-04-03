@@ -7,18 +7,20 @@ Detailed reference for the ish prototype's internal structure. For an overview, 
 ## Crate Dependency Graph
 
 ```
-ish-shell (binary)
-├── ish-ast
-├── ish-vm ──────── ish-ast, gc, serde_json
-├── ish-stdlib ──── ish-ast, ish-vm
-└── ish-codegen ─── ish-ast, ish-vm, ish-runtime, libloading, tempfile
-
-ish-runtime (standalone — no ish-* dependencies)
-├── serde
-└── serde_json
+ish-core (standalone — TypeAnnotation, serde)
+  ↑           ↑
+ish-ast    ish-runtime ── ish-core, gc, tokio
+  ↑           ↑
+ish-parser  ish-vm ────── ish-ast, ish-runtime, gc, serde_json, tokio
+  ↑           ↑
+  └─── ish-codegen ─── ish-ast, ish-vm, ish-runtime, libloading, tempfile
+  └─── ish-stdlib ──── ish-ast, ish-vm
+  └─── ish-shell (binary)
 ```
 
-`ish-runtime` is intentionally dependency-free (relative to other ish crates) so that compiled `.so` files can link against it without pulling in the full interpreter.
+`ish-core` contains shared types (primarily `TypeAnnotation`) used by both `ish-ast` and `ish-runtime`.
+
+`ish-runtime` contains the runtime type system (`Value`, `Shim`, `RuntimeError`, `ErrorCode`, `IshFunction`) so that compiled packages can link against it without pulling in the full interpreter.
 
 ---
 
@@ -112,29 +114,11 @@ fn factorial(n) {
 
 ## ish-vm
 
-**Purpose:** Execute AST programs via tree-walking interpretation.
+**Purpose:** Execute AST programs via tree-walking interpretation. Value types (`Value`, `Shim`, `RuntimeError`, `ErrorCode`, `IshFunction`) are defined in `ish-runtime` and re-exported.
 
-### Value System (`value.rs`)
+### Value System
 
-```rust
-pub enum Value {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    String(Rc<String>),
-    Null,
-    Object(ObjectRef),              // Gc<GcCell<HashMap<String, Value>>>
-    List(ListRef),                  // Gc<GcCell<Vec<Value>>>
-    Function(FunctionRef),          // Gc<IshFunction>
-    BuiltinFunction(BuiltinRef),    // Rc<BuiltinFn>
-}
-```
-
-- **GC-managed:** Objects, Lists, and Functions use the `gc` crate (v0.5) for garbage collection
-- **Strings** use `Rc<String>` (cheap cloning, no GC overhead for immutable data)
-- **Value implements `Trace` and `Finalize`** for GC integration (plus `Drop`)
-- **`PartialEq`** supports cross-type Int/Float comparison
-- **`is_truthy()`** — false for `false`, `0`, `0.0`, `Null`; true for everything else
+See `ish-runtime` below for the full `Value` enum, `Shim` type alias, `IshFunction` struct, and `RuntimeError`/`ErrorCode` types.
 
 ### Environment (`environment.rs`)
 
@@ -164,17 +148,23 @@ Closures capture an `Environment` at definition time. When a closure is called, 
 ```rust
 pub struct IshVm {
     pub global_env: Environment,
+    pub defer_stack: Vec<Vec<(Statement, Environment)>>,
+    pub ledger: LedgerState,
 }
 ```
+
+The VM is accessed via `Rc<RefCell<IshVm>>`. Methods are associated functions that take `vm: &Rc<RefCell<IshVm>>` rather than `&mut self`.
 
 **Key methods:**
 
 | Method | Description |
 |--------|-------------|
 | `IshVm::new()` | Creates VM, registers all builtins + AST factory functions |
-| `vm.run(&Program)` | Execute a program, return last expression's value |
-| `vm.eval_expression(&Expression, &Environment)` | Evaluate a single expression |
-| `vm.call_function(&Value, &[Value])` | Call a function value with arguments |
+| `IshVm::run(vm, &Program)` | Execute a program, return last expression's value |
+| `IshVm::eval_expression(vm, &Expression, &Environment)` | Evaluate a single expression |
+| `IshVm::call_function(vm, &Value, &[Value])` | Call a function value with arguments |
+
+All functions — builtins and interpreted — are called uniformly via `(func.shim)(args)`. There is no dispatch on implementation variant.
 
 **Internal control flow** uses a `ControlFlow` enum:
 - `ControlFlow::None` — continue to next statement
@@ -321,18 +311,42 @@ Higher-level functions, also defined as ish programs:
 
 ## ish-runtime
 
-**Purpose:** Minimal value type shared between the interpreter and compiled `.so` files.
+**Purpose:** Runtime types shared between the interpreter and compiled packages.
+
+**Dependencies:** `ish-core` (for `TypeAnnotation`), `gc` (GC-managed values), `tokio` (async runtime for `FutureRef`).
+
+### Value System (`value.rs`)
 
 ```rust
-pub enum IshValue {
+pub enum Value {
     Bool(bool),
     Int(i64),
     Float(f64),
+    String(Rc<String>),
+    Char(char),
     Null,
+    Object(ObjectRef),              // Gc<GcCell<HashMap<String, Value>>>
+    List(ListRef),                  // Gc<GcCell<Vec<Value>>>
+    Function(FunctionRef),          // Gc<IshFunction>
+    Future(FutureRef),              // Rc<RefCell<Option<JoinHandle>>>
+}
+
+pub type Shim = Rc<dyn Fn(&[Value]) -> Result<Value, RuntimeError>>;
+
+pub struct IshFunction {
+    pub name: Option<String>,
+    pub params: Vec<String>,
+    pub param_types: Vec<Option<TypeAnnotation>>,
+    pub return_type: Option<TypeAnnotation>,
+    pub shim: Shim,
+    pub is_async: bool,
+    pub has_yielding_entry: Option<bool>,
 }
 ```
 
-No GC dependency. Compiled functions work with owned values. Currently the FFI boundary uses `i64` directly (the prototype generates `extern "C" fn(i64) -> i64`).
+### Error Handling (`error.rs`)
+
+`RuntimeError` with `message` and optional `thrown_value`. `ErrorCode` enum with 13 variants (E001–E013) for type-safe error construction.
 
 ---
 

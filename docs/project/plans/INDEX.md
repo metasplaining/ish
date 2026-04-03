@@ -15,6 +15,7 @@ Consolidated TODO lists derived from accepted design proposals. Each plan is the
 
 | Date | Topic | Status | File |
 |------|-------|--------|------|
+| 2026-04-02 | Runtime extraction | completed | [runtime-extraction.md](runtime-extraction.md) |
 | 2026-03-31 | Concurrency code and tests | completed | [concurrency-code.md](concurrency-code.md) |
 | 2026-03-31 | Concurrency (documentation) | completed | [concurrency.md](concurrency.md) |
 | 2026-03-20 | Implementation Audit — Types, Errors, Assurance Ledger | completed | [implementation-audit-types-errors-ledger.md](implementation-audit-types-errors-ledger.md) |

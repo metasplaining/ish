@@ -20,7 +20,7 @@ Internals of the ish language processor. These documents reference source code d
 | [vm.md](vm.md) | ish-vm — interpreter, values, environment, builtins, reflection | draft |
 | [stdlib.md](stdlib.md) | ish-stdlib — self-hosted analyzer, generator, standard library | draft |
 | [codegen.md](codegen.md) | ish-codegen — compilation driver, template generation | draft |
-| [runtime.md](runtime.md) | ish-runtime — minimal FFI value type | draft |
+| [runtime.md](runtime.md) | ish-runtime — Value, Shim, RuntimeError, ErrorCode, IshFunction | draft |
 | [shell.md](shell.md) | ish-shell — CLI binary, verification demos | draft |
 
 ---

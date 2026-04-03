@@ -3,7 +3,7 @@ title: Architecture Overview
 category: architecture
 audience: [all]
 status: draft
-last-verified: 2026-03-31
+last-verified: 2026-04-02
 depends-on: [docs/spec/execution.md, docs/spec/modules.md, docs/spec/concurrency.md]
 ---
 
@@ -16,18 +16,20 @@ High-level architecture of the ish prototype language processor.
 ## Crate Dependency Graph
 
 ```
-ish-shell (binary)
-├── ish-ast
-├── ish-vm ──────── ish-ast, gc, serde_json, tokio
-├── ish-stdlib ──── ish-ast, ish-vm
-└── ish-codegen ─── ish-ast, ish-vm, ish-runtime, libloading, tempfile
-
-ish-runtime (standalone — no ish-* dependencies)
-├── serde
-└── serde_json
+ish-core (standalone — TypeAnnotation, serde)
+  ↑           ↑
+ish-ast    ish-runtime ── ish-core, gc, tokio
+  ↑           ↑
+ish-parser  ish-vm ────── ish-ast, ish-runtime, gc, serde_json, tokio
+  ↑           ↑
+  └─── ish-codegen ─── ish-ast, ish-vm, ish-runtime, libloading, tempfile
+  └─── ish-stdlib ──── ish-ast, ish-vm
+  └─── ish-shell (binary)
 ```
 
-`ish-runtime` is intentionally dependency-free (relative to other ish crates) so that compiled `.so` files can link against it without pulling in the full interpreter.
+`ish-core` contains shared types (primarily `TypeAnnotation`) used by both `ish-ast` and `ish-runtime`.
+
+`ish-runtime` contains the runtime type system (`Value`, `Shim`, `RuntimeError`, `ErrorCode`, `IshFunction`) and is intentionally free of interpreter dependencies so that compiled packages can link against it without pulling in the full VM.
 
 ---
 
@@ -47,10 +49,11 @@ The interpreter's `eval` function is `async`, and yield budget checks insert `to
 
 | Crate | Purpose | Source |
 |-------|---------|--------|
+| [ish-core](overview.md) | Shared types (`TypeAnnotation`) used by both AST and runtime | `proto/ish-core/` |
 | [ish-ast](ast.md) | AST node types, builder API, display formatting | `proto/ish-ast/` |
-| [ish-vm](vm.md) | Tree-walking interpreter, GC-managed values, builtins, reflection | `proto/ish-vm/` |
+| [ish-vm](vm.md) | Tree-walking interpreter, Environment, builtins, reflection | `proto/ish-vm/` |
 | [ish-stdlib](stdlib.md) | Self-hosted analyzer, Rust generator, standard library | `proto/ish-stdlib/` |
-| [ish-runtime](runtime.md) | Minimal FFI value type shared between interpreter and compiled code | `proto/ish-runtime/` |
+| [ish-runtime](runtime.md) | Runtime types: Value, Shim, RuntimeError, ErrorCode, IshFunction | `proto/ish-runtime/` |
 | [ish-codegen](codegen.md) | Compilation driver: temp Cargo project → `cargo build` → load `.so` | `proto/ish-codegen/` |
 | [ish-shell](shell.md) | CLI binary running verification demos | `proto/ish-shell/` |
 
@@ -95,32 +98,35 @@ Self-hosted tools receive AST nodes as ish Objects (via `program_to_value()`), w
 
 ```
 proto/
-├── Cargo.toml                          Workspace: 6 members
+├── Cargo.toml                          Workspace: 8 members
 ├── README.md                           Prototype overview and quick start
+├── ish-core/src/
+│   └── lib.rs                          TypeAnnotation enum
 ├── ish-ast/src/
 │   ├── lib.rs                          AST types, convenience constructors (8 tests)
 │   ├── builder.rs                      ProgramBuilder, BlockBuilder (2 tests)
 │   └── display.rs                      fmt::Display for AST (1 test)
 ├── ish-vm/src/
-│   ├── lib.rs                          Module declarations
-│   ├── value.rs                        Value enum, ObjectRef, ListRef, FunctionRef
+│   ├── lib.rs                          Module declarations, re-exports from ish-runtime
 │   ├── environment.rs                  Lexical scope chain
-│   ├── interpreter.rs                  IshVm, eval, exec, call (8 tests)
-│   ├── builtins.rs                     45 built-in functions (6 tests)
-│   ├── reflection.rs                   AST↔Value conversion, AST factories (4 tests)
-│   └── error.rs                        RuntimeError type
+│   ├── interpreter.rs                  IshVm (Rc<RefCell>), eval, exec, call
+│   ├── builtins.rs                     Built-in functions
+│   ├── reflection.rs                   AST↔Value conversion, AST factories
+│   └── ledger/                         Assurance ledger runtime
+├── ish-runtime/src/
+│   ├── lib.rs                          Re-exports
+│   ├── value.rs                        Value enum, Shim, IshFunction, ObjectRef, ListRef, FunctionRef, FutureRef
+│   └── error.rs                        RuntimeError, ErrorCode
 ├── ish-stdlib/src/
 │   ├── lib.rs                          load_all() entry point
 │   ├── analyzer.rs                     Self-hosted code analyzer (4 tests)
 │   ├── generator.rs                    Self-hosted Rust generator (3 tests)
 │   └── stdlib.rs                       abs, max, min, range, etc. (6 tests)
-├── ish-runtime/src/
-│   └── lib.rs                          IshValue enum (1 test)
 ├── ish-codegen/src/
 │   ├── lib.rs                          CompilationDriver (2 tests)
 │   └── template.rs                     Cargo.toml + lib.rs templates (2 tests)
 └── ish-shell/src/
-    └── main.rs                         6 end-to-end verification demos
+    └── main.rs                         End-to-end verification demos
 ```
 
 ---

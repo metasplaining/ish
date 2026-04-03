@@ -2,7 +2,7 @@ use gc::{Finalize, Gc, GcCell, Trace};
 use std::collections::HashMap;
 
 use crate::value::Value;
-use crate::error::RuntimeError;
+use crate::error::{ErrorCode, RuntimeError};
 
 /// A single scope containing variable bindings.
 #[derive(Debug, Clone, Trace, Finalize)]
@@ -52,7 +52,7 @@ impl Environment {
         if let Some(ref parent) = scope.parent {
             return parent.get(name);
         }
-        Err(RuntimeError::system_error(format!("undefined variable: {}", name), "E005"))
+        Err(RuntimeError::system_error(format!("undefined variable: {}", name), ErrorCode::UndefinedVariable))
     }
 
     /// Set (re-assign) an existing variable by walking the scope chain.
@@ -65,7 +65,7 @@ impl Environment {
         if let Some(ref parent) = scope.parent {
             return parent.set(name, value);
         }
-        Err(RuntimeError::system_error(format!("undefined variable: {}", name), "E005"))
+        Err(RuntimeError::system_error(format!("undefined variable: {}", name), ErrorCode::UndefinedVariable))
     }
 }
 

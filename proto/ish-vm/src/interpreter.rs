@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -8,10 +9,22 @@ use gc::Gc;
 use ish_ast::*;
 
 use crate::environment::Environment;
-use crate::error::RuntimeError;
+use crate::error::{ErrorCode, RuntimeError};
 use crate::value::*;
 use crate::builtins;
 use crate::ledger::LedgerState;
+
+/// Pending interpreted function execution. When an interpreted function's shim
+/// is called, it prepares the child scope and stores the body + env here.
+/// `call_function_inner` picks it up and does the async body execution.
+struct InterpCall {
+    body: Statement,
+    env: Environment,
+}
+
+thread_local! {
+    static PENDING_INTERP_CALL: RefCell<Option<InterpCall>> = RefCell::new(None);
+}
 
 /// Signal for control flow: normal completion, return, throw, or break.
 enum ControlFlow {
@@ -144,54 +157,54 @@ impl IshVm {
     /// Pop the current defer frame and execute all deferred statements in
     /// LIFO order. Errors from deferred statements are silently ignored
     /// (they do not override in-flight control flow).
-    async fn pop_and_run_defers(&mut self, task: &mut TaskContext, yc: &mut YieldContext) {
+    async fn pop_and_run_defers(vm: &Rc<RefCell<IshVm>>, task: &mut TaskContext, yc: &mut YieldContext) {
         if let Some(deferred) = task.defer_stack.pop() {
             for (d, env) in deferred.into_iter().rev() {
-                let _ = self.exec_statement(task, yc, &d, &env).await;
+                let _ = Self::exec_statement(vm, task, yc, &d, &env).await;
             }
         }
     }
 
     /// Execute a full program.
-    pub async fn run(&mut self, program: &Program) -> Result<Value, RuntimeError> {
+    pub async fn run(vm: &Rc<RefCell<IshVm>>, program: &Program) -> Result<Value, RuntimeError> {
         let mut task = TaskContext::new();
         let mut yc = YieldContext::new();
         let mut last = Value::Null;
-        let env = self.global_env.clone();
+        let env = vm.borrow().global_env.clone();
         task.push_defer_frame();
         for stmt in &program.statements {
-            match self.exec_statement(&mut task, &mut yc, stmt, &env).await {
+            match Self::exec_statement(vm, &mut task, &mut yc, stmt, &env).await {
                 Ok(ControlFlow::Return(v)) => {
                     last = v;
                     break;
                 }
                 Ok(ControlFlow::Throw(v)) => {
-                    self.pop_and_run_defers(&mut task, &mut yc).await;
+                    Self::pop_and_run_defers(vm, &mut task, &mut yc).await;
                     return Err(RuntimeError::system_error(format!(
                         "Unhandled throw: {}", v.to_display_string()
-                    ), "E001"));
+                    ), ErrorCode::UnhandledThrow));
                 }
                 Ok(ControlFlow::ExprValue(v)) => last = v,
                 Ok(ControlFlow::None) => {}
                 Err(e) => {
-                    self.pop_and_run_defers(&mut task, &mut yc).await;
+                    Self::pop_and_run_defers(vm, &mut task, &mut yc).await;
                     return Err(e);
                 }
             }
         }
-        self.pop_and_run_defers(&mut task, &mut yc).await;
+        Self::pop_and_run_defers(vm, &mut task, &mut yc).await;
 
         // Audit: future_drop — check if any futures were spawned but not awaited
         let unawaited = crate::value::take_unawaited_future_count();
         if unawaited > 0 {
-            let features = self.ledger.active_features();
+            let features = vm.borrow().ledger.active_features();
             if let crate::ledger::audit::AuditResult::Discrepancy(report) =
                 crate::ledger::audit::audit_future_drop(
                     &features,
                     &format!("{} future(s) dropped without await", unawaited),
                 )
             {
-                return Err(RuntimeError::system_error(report.message, "E011"));
+                return Err(RuntimeError::system_error(report.message, ErrorCode::AsyncError));
             }
         }
 
@@ -200,7 +213,7 @@ impl IshVm {
 
     /// Execute a single statement in the given environment.
     fn exec_statement<'a>(
-        &'a mut self,
+        vm: &'a Rc<RefCell<IshVm>>,
         task: &'a mut TaskContext,
         yc: &'a mut YieldContext,
         stmt: &'a Statement,
@@ -209,20 +222,20 @@ impl IshVm {
         Box::pin(async move {
         match stmt {
             Statement::VariableDecl { name, value, type_annotation, .. } => {
-                let val = self.eval_expression(task, yc, value, env).await?;
-                self.audit_type_annotation(name, &val, type_annotation.as_ref())?;
+                let val = Self::eval_expression(vm, task, yc, value, env).await?;
+                Self::audit_type_annotation(vm, name, &val, type_annotation.as_ref())?;
                 env.define(name.clone(), val);
                 Ok(ControlFlow::None)
             }
 
             Statement::Assignment { target, value } => {
-                let val = self.eval_expression(task, yc, value, env).await?;
+                let val = Self::eval_expression(vm, task, yc, value, env).await?;
                 match target {
                     AssignTarget::Variable(name) => {
                         env.set(name, val)?;
                     }
                     AssignTarget::Property { object, property } => {
-                        let obj = self.eval_expression(task, yc, object, env).await?;
+                        let obj = Self::eval_expression(vm, task, yc, object, env).await?;
                         if let Value::Object(ref obj_ref) = obj {
                             obj_ref.borrow_mut().insert(property.clone(), val);
                         } else {
@@ -230,12 +243,12 @@ impl IshVm {
                                 "cannot set property '{}' on {}",
                                 property,
                                 obj.type_name()
-                            ), "E004"));
+                            ), ErrorCode::TypeMismatch));
                         }
                     }
                     AssignTarget::Index { object, index } => {
-                        let obj = self.eval_expression(task, yc, object, env).await?;
-                        let idx = self.eval_expression(task, yc, index, env).await?;
+                        let obj = Self::eval_expression(vm, task, yc, object, env).await?;
+                        let idx = Self::eval_expression(vm, task, yc, index, env).await?;
                         if let Value::List(ref list_ref) = obj {
                             if let Value::Int(i) = idx {
                                 let mut list = list_ref.borrow_mut();
@@ -244,25 +257,25 @@ impl IshVm {
                                     return Err(RuntimeError::system_error(format!(
                                         "index {} out of bounds (length {})",
                                         i, len
-                                    ), "E007"));
+                                    ), ErrorCode::IndexOutOfBounds));
                                 }
                                 list[i as usize] = val;
                             } else {
-                                return Err(RuntimeError::system_error("list index must be an integer", "E004"));
+                                return Err(RuntimeError::system_error("list index must be an integer", ErrorCode::TypeMismatch));
                             }
                         } else if let Value::Object(ref obj_ref) = obj {
                             if let Value::String(ref key) = idx {
                                 obj_ref.borrow_mut().insert(key.as_ref().clone(), val);
                             } else {
                                 return Err(RuntimeError::system_error(
-                                    "object index must be a string", "E004"
+                                    "object index must be a string", ErrorCode::TypeMismatch
                                 ));
                             }
                         } else {
                             return Err(RuntimeError::system_error(format!(
                                 "cannot index into {}",
                                 obj.type_name()
-                            ), "E004"));
+                            ), ErrorCode::TypeMismatch));
                         }
                     }
                 }
@@ -278,7 +291,7 @@ impl IshVm {
                         task.register_defer(*body.clone(), block_env.clone());
                         continue;
                     }
-                    match self.exec_statement(task, yc, s, &block_env).await? {
+                    match Self::exec_statement(vm, task, yc, s, &block_env).await? {
                         ControlFlow::Return(v) => { result = ControlFlow::Return(v); break; }
                         ControlFlow::Throw(v) => { result = ControlFlow::Throw(v); break; }
                         ControlFlow::None | ControlFlow::ExprValue(_) => {}
@@ -292,52 +305,60 @@ impl IshVm {
                 then_block,
                 else_block,
             } => {
-                let cond = self.eval_expression(task, yc, condition, env).await?;
+                let cond = Self::eval_expression(vm, task, yc, condition, env).await?;
 
                 // Type narrowing: always analyze the condition and apply
                 // narrowing facts.  Entry maintenance is unconditional.
                 use crate::ledger::narrowing::{analyze_condition, invert_for_else, NarrowingFact};
 
                 let facts = analyze_condition(condition);
-                let snapshot = self.ledger.save_entries();
+                let snapshot = vm.borrow().ledger.save_entries();
 
                 if cond.is_truthy() {
                     // Apply facts to true branch.
                     for fact in &facts {
                         match fact {
                             NarrowingFact::IsType { variable, type_name } => {
-                                self.ledger.narrow_type(variable, type_name);
+                                vm.borrow_mut().ledger.narrow_type(variable, type_name);
                             }
                             NarrowingFact::NotNull { variable } => {
-                                self.ledger.narrow_exclude_null(variable);
+                                vm.borrow_mut().ledger.narrow_exclude_null(variable);
                             }
                             NarrowingFact::IsNull { .. } => {
                                 // IsNull in true branch: no narrowing benefit.
                             }
                         }
                     }
-                    let result = self.exec_statement(task, yc, then_block, env).await;
-                    let then_entries = self.ledger.save_entries();
-                    self.ledger.restore_entries(snapshot);
-                    self.ledger.merge_entries(then_entries, self.ledger.save_entries());
+                    let result = Self::exec_statement(vm, task, yc, then_block, env).await;
+                    let then_entries = vm.borrow().ledger.save_entries();
+                    {
+                        let mut vm_mut = vm.borrow_mut();
+                        vm_mut.ledger.restore_entries(snapshot);
+                        let current = vm_mut.ledger.save_entries();
+                        vm_mut.ledger.merge_entries(then_entries, current);
+                    }
                     result
                 } else if let Some(eb) = else_block {
                     let else_facts = invert_for_else(&facts);
                     for fact in &else_facts {
                         match fact {
                             NarrowingFact::IsType { variable, type_name } => {
-                                self.ledger.narrow_type(variable, type_name);
+                                vm.borrow_mut().ledger.narrow_type(variable, type_name);
                             }
                             NarrowingFact::NotNull { variable } => {
-                                self.ledger.narrow_exclude_null(variable);
+                                vm.borrow_mut().ledger.narrow_exclude_null(variable);
                             }
                             NarrowingFact::IsNull { .. } => {}
                         }
                     }
-                    let result = self.exec_statement(task, yc, eb, env).await;
-                    let else_entries = self.ledger.save_entries();
-                    self.ledger.restore_entries(snapshot);
-                    self.ledger.merge_entries(self.ledger.save_entries(), else_entries);
+                    let result = Self::exec_statement(vm, task, yc, eb, env).await;
+                    let else_entries = vm.borrow().ledger.save_entries();
+                    {
+                        let mut vm_mut = vm.borrow_mut();
+                        vm_mut.ledger.restore_entries(snapshot);
+                        let current = vm_mut.ledger.save_entries();
+                        vm_mut.ledger.merge_entries(current, else_entries);
+                    }
                     result
                 } else {
                     Ok(ControlFlow::None)
@@ -347,7 +368,7 @@ impl IshVm {
             Statement::While { condition, body, yield_every } => {
                 // Evaluate yield_every count if present
                 let yield_every_n = if let Some(ye_expr) = yield_every {
-                    match self.eval_expression(task, yc, ye_expr, env).await? {
+                    match Self::eval_expression(vm, task, yc, ye_expr, env).await? {
                         Value::Int(n) if n > 0 => Some(n as u64),
                         _ => None,
                     }
@@ -356,7 +377,7 @@ impl IshVm {
                 };
                 let mut iteration: u64 = 0;
                 loop {
-                    let cond = self.eval_expression(task, yc, condition, env).await?;
+                    let cond = Self::eval_expression(vm, task, yc, condition, env).await?;
                     if !cond.is_truthy() {
                         break;
                     }
@@ -370,7 +391,7 @@ impl IshVm {
                             yc.reset_budget();
                         }
                     }
-                    match self.exec_statement(task, yc, body, env).await? {
+                    match Self::exec_statement(vm, task, yc, body, env).await? {
                         ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
                         ControlFlow::Throw(v) => return Ok(ControlFlow::Throw(v)),
                         ControlFlow::None | ControlFlow::ExprValue(_) => {}
@@ -385,10 +406,10 @@ impl IshVm {
                 body,
                 yield_every,
             } => {
-                let iter_val = self.eval_expression(task, yc, iterable, env).await?;
+                let iter_val = Self::eval_expression(vm, task, yc, iterable, env).await?;
                 // Evaluate yield_every count if present
                 let yield_every_n = if let Some(ye_expr) = yield_every {
-                    match self.eval_expression(task, yc, ye_expr, env).await? {
+                    match Self::eval_expression(vm, task, yc, ye_expr, env).await? {
                         Value::Int(n) if n > 0 => Some(n as u64),
                         _ => None,
                     }
@@ -411,7 +432,7 @@ impl IshVm {
                                 yc.reset_budget();
                             }
                         }
-                        match self.exec_statement(task, yc, body, &loop_env).await? {
+                        match Self::exec_statement(vm, task, yc, body, &loop_env).await? {
                             ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
                             ControlFlow::Throw(v) => return Ok(ControlFlow::Throw(v)),
                             ControlFlow::None | ControlFlow::ExprValue(_) => {}
@@ -421,14 +442,14 @@ impl IshVm {
                     return Err(RuntimeError::system_error(format!(
                         "cannot iterate over {}",
                         iter_val.type_name()
-                    ), "E004"));
+                    ), ErrorCode::TypeMismatch));
                 }
                 Ok(ControlFlow::None)
             }
 
             Statement::Return { value } => {
                 let val = if let Some(expr) = value {
-                    self.eval_expression(task, yc, expr, env).await?
+                    Self::eval_expression(vm, task, yc, expr, env).await?
                 } else {
                     Value::Null
                 };
@@ -436,7 +457,7 @@ impl IshVm {
             }
 
             Statement::ExpressionStmt(expr) => {
-                let val = self.eval_expression(task, yc, expr, env).await?;
+                let val = Self::eval_expression(vm, task, yc, expr, env).await?;
                 Ok(ControlFlow::ExprValue(val))
             }
 
@@ -452,13 +473,31 @@ impl IshVm {
                 } else {
                     None
                 };
+                // Create an interpreted function shim that captures body + env.
+                let captured_body = *body.clone();
+                let captured_env = env.clone();
+                let captured_params = param_names.clone();
+                let shim: Shim = Rc::new(move |args: &[Value]| {
+                    // Create a child scope from the captured closure environment
+                    let call_env = captured_env.child();
+                    for (param, arg) in captured_params.iter().zip(args.iter()) {
+                        call_env.define(param.clone(), arg.clone());
+                    }
+                    // Store pending execution for call_function_inner to pick up
+                    PENDING_INTERP_CALL.with(|cell| {
+                        *cell.borrow_mut() = Some(InterpCall {
+                            body: captured_body.clone(),
+                            env: call_env,
+                        });
+                    });
+                    Ok(Value::Null) // placeholder — call_function_inner handles the real result
+                });
                 let func_val = Value::Function(Gc::new(IshFunction {
                     name: Some(name.clone()),
                     params: param_names,
                     param_types,
                     return_type: return_type.clone(),
-                    implementation: crate::value::FunctionImplementation::Interpreted(*body.clone()),
-                    closure_env: env.clone(),
+                    shim,
                     is_async: *is_async,
                     has_yielding_entry,
                 }));
@@ -467,7 +506,7 @@ impl IshVm {
             }
 
             Statement::Throw { value } => {
-                let val = self.eval_expression(task, yc, value, env).await?;
+                let val = Self::eval_expression(vm, task, yc, value, env).await?;
                 // Throw audit (unconditional): ensure the thrown value
                 // qualifies as an error and add @Error entry.
                 use crate::ledger::entry::Entry;
@@ -478,7 +517,7 @@ impl IshVm {
                         if has_message {
                             // (a) Object with message: String → add @Error entry
                             drop(map);
-                            self.ledger.add_entry("@thrown",
+                            vm.borrow_mut().ledger.add_entry("@thrown",
                                 Entry::new("Error").with_param("message", "String"));
                             val
                         } else {
@@ -488,10 +527,10 @@ impl IshVm {
                             wrapper.insert("message".to_string(), Value::String(Rc::new(
                                 "throw audit: thrown object lacks 'message: String' property".to_string()
                             )));
-                            wrapper.insert("code".to_string(), Value::String(Rc::new("E001".to_string())));
+                            wrapper.insert("code".to_string(), Value::String(Rc::new(ErrorCode::UnhandledThrow.as_str().to_string())));
                             wrapper.insert("original".to_string(), val);
                             let wrapped = new_object(wrapper);
-                            self.ledger.add_entry("@thrown",
+                            vm.borrow_mut().ledger.add_entry("@thrown",
                                 Entry::new("Error").with_param("message", "String"));
                             wrapped
                         }
@@ -502,10 +541,10 @@ impl IshVm {
                         wrapper.insert("message".to_string(), Value::String(Rc::new(
                             format!("throw audit: non-object thrown: {}", val)
                         )));
-                        wrapper.insert("code".to_string(), Value::String(Rc::new("E001".to_string())));
+                        wrapper.insert("code".to_string(), Value::String(Rc::new(ErrorCode::UnhandledThrow.as_str().to_string())));
                         wrapper.insert("original".to_string(), val);
                         let wrapped = new_object(wrapper);
-                        self.ledger.add_entry("@thrown",
+                        vm.borrow_mut().ledger.add_entry("@thrown",
                             Entry::new("Error").with_param("message", "String"));
                         wrapped
                     }
@@ -517,7 +556,7 @@ impl IshVm {
                 // Collect thrown value from either ControlFlow::Throw or
                 // a RuntimeError with thrown_value (throw that crossed a
                 // function boundary via call_function).
-                let (result, thrown) = match self.exec_statement(task, yc, body, env).await {
+                let (result, thrown) = match Self::exec_statement(vm, task, yc, body, env).await {
                     Ok(ControlFlow::Throw(v)) => (ControlFlow::None, Some(v)),
                     Ok(other) => (other, None),
                     Err(e) if e.thrown_value.is_some() => {
@@ -534,7 +573,7 @@ impl IshVm {
                         // matching will come with the type system).
                         let catch_env = env.child();
                         catch_env.define(clause.param.clone(), thrown.clone());
-                        catch_result = self.exec_statement(task, yc, &clause.body, &catch_env).await?;
+                        catch_result = Self::exec_statement(vm, task, yc, &clause.body, &catch_env).await?;
                         caught = true;
                         break;
                     }
@@ -549,7 +588,7 @@ impl IshVm {
                 };
                 // Execute finally block if present (always runs)
                 if let Some(fin) = finally {
-                    let fin_result = self.exec_statement(task, yc, fin, env).await?;
+                    let fin_result = Self::exec_statement(vm, task, yc, fin, env).await?;
                     // Per decision: no return from finally.
                     // finally block does NOT override the result.
                     // But if finally throws, that replaces the original.
@@ -565,7 +604,7 @@ impl IshVm {
                 let mut initialized: Vec<(String, Value)> = Vec::new();
                 // Initialize resources in order
                 for (name, expr) in resources {
-                    match self.eval_expression(task, yc, expr, &with_env).await {
+                    match Self::eval_expression(vm, task, yc, expr, &with_env).await {
                         Ok(val) => {
                             with_env.define(name.clone(), val.clone());
                             initialized.push((name.clone(), val));
@@ -573,18 +612,18 @@ impl IshVm {
                         Err(e) => {
                             // Close already-initialized resources in reverse order
                             for (_, res) in initialized.into_iter().rev() {
-                                let _ = self.try_close(task, yc, &res).await;
+                                let _ = Self::try_close(vm, task, yc, &res).await;
                             }
                             return Err(e);
                         }
                     }
                 }
                 // Execute body
-                let result = self.exec_statement(task, yc, body, &with_env).await?;
+                let result = Self::exec_statement(vm, task, yc, body, &with_env).await?;
                 // Close resources in reverse order
                 let mut close_error: Option<Value> = None;
                 for (_, res) in initialized.into_iter().rev() {
-                    if let Err(_e) = self.try_close(task, yc, &res).await {
+                    if let Err(_e) = Self::try_close(vm, task, yc, &res).await {
                         // If close fails, save the error
                         if close_error.is_none() {
                             close_error = Some(Value::String(Rc::new(_e.message)));
@@ -626,7 +665,7 @@ impl IshVm {
             }
 
             Statement::ShellCommand { command, args, pipes, redirections, background: _ } => {
-                self.exec_shell_command(task, yc, command, args, pipes, redirections, env).await
+                Self::exec_shell_command(vm, task, yc, command, args, pipes, redirections, env).await
             }
 
             Statement::Annotated { annotations, inner } => {
@@ -637,7 +676,7 @@ impl IshVm {
                 for ann in annotations {
                     match ann {
                         Annotation::Standard(name) => {
-                            self.ledger.push_standard(name.clone());
+                            vm.borrow_mut().ledger.push_standard(name.clone());
                             pushed_standards.push(name.clone());
                         }
                         Annotation::Entry(items) => {
@@ -661,7 +700,7 @@ impl IshVm {
                     // Audit: guaranteed_yield — unyielding blocks are flagged if
                     // the active standard requires guaranteed_yield, unless the
                     // block/function has a Complexity(value: "simple") entry.
-                    let features = self.ledger.active_features();
+                    let features = vm.borrow().ledger.active_features();
                     if let Some(feature) = features.get("guaranteed_yield") {
                         if feature.annotation
                             == crate::ledger::standard::AnnotationDimension::Required
@@ -673,7 +712,7 @@ impl IshVm {
                                 _ => None,
                             };
                             let has_simple = fn_name.map_or(false, |n| {
-                                self.ledger.get_entries(n)
+                                vm.borrow().ledger.get_entries(n)
                                     .and_then(|es| es.get("Complexity"))
                                     .and_then(|e| e.params.get("value"))
                                     .map_or(false, |v| v == "simple")
@@ -682,13 +721,13 @@ impl IshVm {
                                 let item = fn_name.unwrap_or("block");
                                 return Err(RuntimeError::system_error(
                                     format!("'{}' is unyielding — guaranteed yield required by active standard", item),
-                                    "E011",
+                                    ErrorCode::AsyncError,
                                 ));
                             }
                         }
                     }
                 }
-                let result = self.exec_statement(task, yc, inner, env).await;
+                let result = Self::exec_statement(vm, task, yc, inner, env).await;
                 if unyielding {
                     yc.unyielding_depth -= 1;
                 }
@@ -699,7 +738,7 @@ impl IshVm {
                 if !pushed_standards.is_empty() {
                     let unawaited = crate::value::take_unawaited_future_count();
                     if unawaited > 0 {
-                        let features = self.ledger.active_features();
+                        let features = vm.borrow().ledger.active_features();
                         if let crate::ledger::audit::AuditResult::Discrepancy(report) =
                             crate::ledger::audit::audit_future_drop(
                                 &features,
@@ -708,15 +747,15 @@ impl IshVm {
                         {
                             // Pop standards before returning the error.
                             for _ in pushed_standards.iter().rev() {
-                                self.ledger.pop_standard();
+                                vm.borrow_mut().ledger.pop_standard();
                             }
-                            return Err(RuntimeError::system_error(report.message, "E011"));
+                            return Err(RuntimeError::system_error(report.message, ErrorCode::AsyncError));
                         }
                     }
                 }
                 // Pop standards in reverse order.
                 for _ in pushed_standards.iter().rev() {
-                    self.ledger.pop_standard();
+                    vm.borrow_mut().ledger.pop_standard();
                 }
                 result
             }
@@ -733,14 +772,14 @@ impl IshVm {
                     let state = parse_feature_params(&feat.params);
                     std = std.with_feature(feat.name.clone(), state);
                 }
-                self.ledger.standard_registry.register(std);
+                vm.borrow_mut().ledger.standard_registry.register(std);
                 Ok(ControlFlow::None)
             }
 
             Statement::EntryTypeDef { name, .. } => {
                 // Register as a simple entry type (no required properties for now).
                 use crate::ledger::entry_type::EntryType;
-                self.ledger.entry_type_registry.register(EntryType::new(name.clone()));
+                vm.borrow_mut().ledger.entry_type_registry.register(EntryType::new(name.clone()));
                 Ok(ControlFlow::None)
             }
 
@@ -750,19 +789,19 @@ impl IshVm {
             }
 
             Statement::Incomplete { kind } => {
-                Err(RuntimeError::system_error(format!("incomplete input: {:?}", kind), "E004"))
+                Err(RuntimeError::system_error(format!("incomplete input: {:?}", kind), ErrorCode::TypeMismatch))
             }
 
             Statement::Yield => {
                 // Audit: async_annotation — check if current function is not async
                 if let Some((false, ref fn_name)) = task.async_stack.last() {
-                    let features = self.ledger.active_features();
+                    let features = vm.borrow().ledger.active_features();
                     if let crate::ledger::audit::AuditResult::Discrepancy(report) =
                         crate::ledger::audit::audit_async_annotation(
                             &features, false, fn_name,
                         )
                     {
-                        return Err(RuntimeError::system_error(report.message, "E011"));
+                        return Err(RuntimeError::system_error(report.message, ErrorCode::AsyncError));
                     }
                 }
                 tokio::task::yield_now().await;
@@ -774,12 +813,12 @@ impl IshVm {
     }
 
     /// Try to call close() on a value, used by WithBlock.
-    async fn try_close(&mut self, task: &mut TaskContext, yc: &mut YieldContext, value: &Value) -> Result<(), RuntimeError> {
+    async fn try_close(vm: &Rc<RefCell<IshVm>>, task: &mut TaskContext, yc: &mut YieldContext, value: &Value) -> Result<(), RuntimeError> {
         if let Value::Object(ref obj_ref) = value {
             let map = obj_ref.borrow();
             if let Some(close_fn) = map.get("close").cloned() {
                 drop(map);
-                self.call_function_inner(task, yc, &close_fn, &[]).await?;
+                Self::call_function_inner(vm, task, yc, &close_fn, &[]).await?;
             }
         }
         Ok(())
@@ -787,7 +826,7 @@ impl IshVm {
 
     /// Evaluate an expression in the given environment.
     fn eval_expression<'a>(
-        &'a mut self,
+        vm: &'a Rc<RefCell<IshVm>>,
         task: &'a mut TaskContext,
         yc: &'a mut YieldContext,
         expr: &'a Expression,
@@ -807,29 +846,29 @@ impl IshVm {
             Expression::Identifier(name) => env.get(name),
 
             Expression::BinaryOp { op, left, right } => {
-                let lhs = self.eval_expression(task, yc, left, env).await?;
+                let lhs = Self::eval_expression(vm, task, yc, left, env).await?;
                 // Short-circuit for logical operators
                 match op {
                     BinaryOperator::And => {
                         if !lhs.is_truthy() {
                             return Ok(lhs);
                         }
-                        return self.eval_expression(task, yc, right, env).await;
+                        return Self::eval_expression(vm, task, yc, right, env).await;
                     }
                     BinaryOperator::Or => {
                         if lhs.is_truthy() {
                             return Ok(lhs);
                         }
-                        return self.eval_expression(task, yc, right, env).await;
+                        return Self::eval_expression(vm, task, yc, right, env).await;
                     }
                     _ => {}
                 }
-                let rhs = self.eval_expression(task, yc, right, env).await?;
-                self.eval_binary_op(op, &lhs, &rhs)
+                let rhs = Self::eval_expression(vm, task, yc, right, env).await?;
+                Self::eval_binary_op(op, &lhs, &rhs)
             }
 
             Expression::UnaryOp { op, operand } => {
-                let val = self.eval_expression(task, yc, operand, env).await?;
+                let val = Self::eval_expression(vm, task, yc, operand, env).await?;
                 match op {
                     UnaryOperator::Not => Ok(Value::Bool(!val.is_truthy())),
                     UnaryOperator::Negate => match val {
@@ -838,13 +877,13 @@ impl IshVm {
                         _ => Err(RuntimeError::system_error(format!(
                             "cannot negate {}",
                             val.type_name()
-                        ), "E004")),
+                        ), ErrorCode::TypeMismatch)),
                     },
                     UnaryOperator::Try => {
                         // ? operator: if value is an error, propagate it; otherwise unwrap
                         // For now, null signals error
                         if val == Value::Null {
-                            return Err(RuntimeError::system_error("tried to unwrap null value with ?".to_string(), "E009"));
+                            return Err(RuntimeError::system_error("tried to unwrap null value with ?".to_string(), ErrorCode::NullUnwrap));
                         }
                         Ok(val)
                     }
@@ -852,18 +891,18 @@ impl IshVm {
             }
 
             Expression::FunctionCall { callee, args } => {
-                let func_val = self.eval_expression(task, yc, callee, env).await?;
+                let func_val = Self::eval_expression(vm, task, yc, callee, env).await?;
                 let mut arg_vals = Vec::with_capacity(args.len());
                 for arg in args {
-                    arg_vals.push(self.eval_expression(task, yc, arg, env).await?);
+                    arg_vals.push(Self::eval_expression(vm, task, yc, arg, env).await?);
                 }
-                self.call_function_inner(task, yc, &func_val, &arg_vals).await
+                Self::call_function_inner(vm, task, yc, &func_val, &arg_vals).await
             }
 
             Expression::ObjectLiteral(pairs) => {
                 let mut map = HashMap::new();
                 for (key, val_expr) in pairs {
-                    let val = self.eval_expression(task, yc, val_expr, env).await?;
+                    let val = Self::eval_expression(vm, task, yc, val_expr, env).await?;
                     map.insert(key.clone(), val);
                 }
                 Ok(new_object(map))
@@ -872,13 +911,13 @@ impl IshVm {
             Expression::ListLiteral(elements) => {
                 let mut items = Vec::with_capacity(elements.len());
                 for elem in elements {
-                    items.push(self.eval_expression(task, yc, elem, env).await?);
+                    items.push(Self::eval_expression(vm, task, yc, elem, env).await?);
                 }
                 Ok(new_list(items))
             }
 
             Expression::PropertyAccess { object, property } => {
-                let obj = self.eval_expression(task, yc, object, env).await?;
+                let obj = Self::eval_expression(vm, task, yc, object, env).await?;
                 match obj {
                     Value::Object(ref obj_ref) => {
                         let map = obj_ref.borrow();
@@ -888,13 +927,13 @@ impl IshVm {
                         "cannot access property '{}' on {}",
                         property,
                         obj.type_name()
-                    ), "E004")),
+                    ), ErrorCode::TypeMismatch)),
                 }
             }
 
             Expression::IndexAccess { object, index } => {
-                let obj = self.eval_expression(task, yc, object, env).await?;
-                let idx = self.eval_expression(task, yc, index, env).await?;
+                let obj = Self::eval_expression(vm, task, yc, object, env).await?;
+                let idx = Self::eval_expression(vm, task, yc, index, env).await?;
                 match (&obj, &idx) {
                     (Value::List(list_ref), Value::Int(i)) => {
                         let list = list_ref.borrow();
@@ -904,7 +943,7 @@ impl IshVm {
                                 "index {} out of bounds (length {})",
                                 i,
                                 list.len()
-                            ), "E007"));
+                            ), ErrorCode::IndexOutOfBounds));
                         }
                         Ok(list[i as usize].clone())
                     }
@@ -916,7 +955,7 @@ impl IshVm {
                         "cannot index {} with {}",
                         obj.type_name(),
                         idx.type_name()
-                    ), "E004")),
+                    ), ErrorCode::TypeMismatch)),
                 }
             }
 
@@ -924,7 +963,32 @@ impl IshVm {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
                     params.iter().map(|p| p.type_annotation.clone()).collect();
-                Ok(new_function(None, param_names, param_types, None, *body.clone(), env.clone(), *is_async))
+                // Create an interpreted function shim for the lambda
+                let captured_body = *body.clone();
+                let captured_env = env.clone();
+                let captured_params = param_names.clone();
+                let shim: Shim = Rc::new(move |args: &[Value]| {
+                    let call_env = captured_env.child();
+                    for (param, arg) in captured_params.iter().zip(args.iter()) {
+                        call_env.define(param.clone(), arg.clone());
+                    }
+                    PENDING_INTERP_CALL.with(|cell| {
+                        *cell.borrow_mut() = Some(InterpCall {
+                            body: captured_body.clone(),
+                            env: call_env,
+                        });
+                    });
+                    Ok(Value::Null)
+                });
+                Ok(Value::Function(Gc::new(IshFunction {
+                    name: None,
+                    params: param_names,
+                    param_types,
+                    return_type: None,
+                    shim,
+                    is_async: *is_async,
+                    has_yielding_entry: None,
+                })))
             }
 
             Expression::StringInterpolation(parts) => {
@@ -933,7 +997,7 @@ impl IshVm {
                     match part {
                         ish_ast::StringPart::Text(text) => result.push_str(text),
                         ish_ast::StringPart::Expr(expr) => {
-                            let val = self.eval_expression(task, yc, expr, env).await?;
+                            let val = Self::eval_expression(vm, task, yc, expr, env).await?;
                             result.push_str(&val.to_display_string());
                         }
                     }
@@ -945,13 +1009,13 @@ impl IshVm {
                 // Execute the inner statement and capture its stdout output
                 match inner.as_ref() {
                     Statement::ShellCommand { command, args, pipes, redirections, background: _ } => {
-                        let resolved_args = self.resolve_shell_args(task, yc, args, env).await?;
-                        let output = self.run_command_pipeline(task, yc, command, &resolved_args, pipes, redirections, env, true).await?;
+                        let resolved_args = Self::resolve_shell_args(vm, task, yc, args, env).await?;
+                        let output = Self::run_command_pipeline(vm, task, yc, command, &resolved_args, pipes, redirections, env, true).await?;
                         Ok(Value::String(Rc::new(output.trim_end_matches('\n').to_string())))
                     }
                     _ => {
                         // Execute as normal statement, capture result
-                        match self.exec_statement(task, yc, inner, env).await? {
+                        match Self::exec_statement(vm, task, yc, inner, env).await? {
                             ControlFlow::ExprValue(v) => Ok(v),
                             ControlFlow::Return(v) => Ok(v),
                             _ => Ok(Value::Null),
@@ -976,13 +1040,13 @@ impl IshVm {
             }
 
             Expression::Incomplete { kind } => {
-                Err(RuntimeError::system_error(format!("incomplete expression: {:?}", kind), "E004"))
+                Err(RuntimeError::system_error(format!("incomplete expression: {:?}", kind), ErrorCode::TypeMismatch))
             }
 
             Expression::Await { callee, args } => {
                 // Audit: async_annotation — check if current function is not async
                 if let Some((false, ref fn_name)) = task.async_stack.last() {
-                    let features = self.ledger.active_features();
+                    let features = vm.borrow().ledger.active_features();
                     if let crate::ledger::audit::AuditResult::Discrepancy(report) =
                         crate::ledger::audit::audit_async_annotation(
                             &features,
@@ -990,11 +1054,11 @@ impl IshVm {
                             fn_name,
                         )
                     {
-                        return Err(RuntimeError::system_error(report.message, "E011"));
+                        return Err(RuntimeError::system_error(report.message, ErrorCode::AsyncError));
                     }
                 }
                 // Resolve callee
-                let callee_val = self.eval_expression(task, yc, callee, env).await?;
+                let callee_val = Self::eval_expression(vm, task, yc, callee, env).await?;
 
                 // Check yielding classification before calling (E012)
                 if let Value::Function(ref f) = callee_val {
@@ -1002,7 +1066,7 @@ impl IshVm {
                         return Err(RuntimeError::system_error(
                             format!("cannot await unyielding function '{}'",
                                 f.name.as_deref().unwrap_or("<anonymous>")),
-                            "E012",
+                            ErrorCode::AwaitUnyielding,
                         ));
                     }
                 }
@@ -1010,11 +1074,11 @@ impl IshVm {
                 // Evaluate arguments
                 let mut arg_vals = Vec::with_capacity(args.len());
                 for arg in args.iter() {
-                    arg_vals.push(self.eval_expression(task, yc, arg, env).await?);
+                    arg_vals.push(Self::eval_expression(vm, task, yc, arg, env).await?);
                 }
 
                 // Call the function
-                let val = self.call_function_inner(task, yc, &callee_val, &arg_vals).await?;
+                let val = Self::call_function_inner(vm, task, yc, &callee_val, &arg_vals).await?;
 
                 // If the result is a Future, await it
                 if let Value::Future(ref future_ref) = val {
@@ -1026,12 +1090,12 @@ impl IshVm {
                                     if join_err.is_cancelled() {
                                         Err(RuntimeError::system_error(
                                             "awaited task was cancelled".to_string(),
-                                            "E011",
+                                            ErrorCode::AsyncError,
                                         ))
                                     } else {
                                         Err(RuntimeError::system_error(
                                             format!("awaited task panicked: {}", join_err),
-                                            "E011",
+                                            ErrorCode::AsyncError,
                                         ))
                                     }
                                 }
@@ -1040,7 +1104,7 @@ impl IshVm {
                         None => {
                             Err(RuntimeError::system_error(
                                 "future has already been awaited".to_string(),
-                                "E011",
+                                ErrorCode::AsyncError,
                             ))
                         }
                     }
@@ -1052,7 +1116,7 @@ impl IshVm {
 
             Expression::Spawn { callee, args } => {
                 // Resolve callee
-                let callee_val = self.eval_expression(task, yc, callee, env).await?;
+                let callee_val = Self::eval_expression(vm, task, yc, callee, env).await?;
 
                 // Check yielding classification before spawning (E013)
                 if let Value::Function(ref f) = callee_val {
@@ -1060,7 +1124,7 @@ impl IshVm {
                         return Err(RuntimeError::system_error(
                             format!("cannot spawn unyielding function '{}'",
                                 f.name.as_deref().unwrap_or("<anonymous>")),
-                            "E013",
+                            ErrorCode::SpawnUnyielding,
                         ));
                     }
                 }
@@ -1068,20 +1132,20 @@ impl IshVm {
                 // Evaluate arguments in the current context
                 let mut arg_vals = Vec::with_capacity(args.len());
                 for arg in args.iter() {
-                    arg_vals.push(self.eval_expression(task, yc, arg, env).await?);
+                    arg_vals.push(Self::eval_expression(vm, task, yc, arg, env).await?);
                 }
 
                 // Spawn a new task that calls the function
-                let mut spawned_vm = self.spawn_clone();
+                let spawned_vm = Rc::new(RefCell::new(vm.borrow().spawn_clone()));
                 let callee_clone = callee_val.clone();
                 let handle = tokio::task::spawn_local(async move {
                     let mut task_ctx = TaskContext::new();
                     let mut yield_ctx = YieldContext::new();
                     task_ctx.push_defer_frame();
-                    let result = spawned_vm.call_function_inner(
-                        &mut task_ctx, &mut yield_ctx, &callee_clone, &arg_vals,
+                    let result = IshVm::call_function_inner(
+                        &spawned_vm, &mut task_ctx, &mut yield_ctx, &callee_clone, &arg_vals,
                     ).await;
-                    spawned_vm.pop_and_run_defers(&mut task_ctx, &mut yield_ctx).await;
+                    IshVm::pop_and_run_defers(&spawned_vm, &mut task_ctx, &mut yield_ctx).await;
                     result
                 });
                 Ok(Value::Future(FutureRef::new(handle)))
@@ -1093,7 +1157,7 @@ impl IshVm {
     // ── Shell command execution ─────────────────────────────────────────────
 
     async fn exec_shell_command(
-        &mut self,
+        vm: &Rc<RefCell<IshVm>>,
         task: &mut TaskContext,
         yc: &mut YieldContext,
         command: &str,
@@ -1102,7 +1166,7 @@ impl IshVm {
         redirections: &[Redirection],
         env: &Environment,
     ) -> Result<ControlFlow, RuntimeError> {
-        let resolved_args = self.resolve_shell_args(task, yc, args, env).await?;
+        let resolved_args = Self::resolve_shell_args(vm, task, yc, args, env).await?;
 
         // Check for builtins
         match command {
@@ -1120,7 +1184,7 @@ impl IshVm {
                     }
                     Err(e) => {
                         env.define("__ish_last_exit_code".to_string(), Value::Int(1));
-                        Err(RuntimeError::system_error(format!("cd: {}: {}", target, e), "E010"))
+                        Err(RuntimeError::system_error(format!("cd: {}: {}", target, e), ErrorCode::ShellError))
                     }
                 }
             }
@@ -1134,7 +1198,7 @@ impl IshVm {
                     }
                     Err(e) => {
                         env.define("__ish_last_exit_code".to_string(), Value::Int(1));
-                        Err(RuntimeError::system_error(format!("pwd: {}", e), "E010"))
+                        Err(RuntimeError::system_error(format!("pwd: {}", e), ErrorCode::ShellError))
                     }
                 }
             }
@@ -1147,7 +1211,7 @@ impl IshVm {
             }
             _ => {
                 // External command
-                let output = self.run_command_pipeline(task, yc, command, &resolved_args, pipes, redirections, env, false).await?;
+                let output = Self::run_command_pipeline(vm, task, yc, command, &resolved_args, pipes, redirections, env, false).await?;
                 if !output.is_empty() {
                     Ok(ControlFlow::ExprValue(Value::String(Rc::new(output))))
                 } else {
@@ -1158,7 +1222,7 @@ impl IshVm {
     }
 
     fn resolve_shell_args<'a>(
-        &'a mut self,
+        vm: &'a Rc<RefCell<IshVm>>,
         task: &'a mut TaskContext,
         yc: &'a mut YieldContext,
         args: &'a [ShellArg],
@@ -1183,12 +1247,12 @@ impl IshVm {
                 ShellArg::CommandSub(inner) => {
                     match inner.as_ref() {
                         Statement::ShellCommand { command, args, pipes, redirections, background: _ } => {
-                            let sub_args = self.resolve_shell_args(task, yc, args, env).await?;
-                            let output = self.run_command_pipeline(task, yc, command, &sub_args, pipes, redirections, env, true).await?;
+                            let sub_args = Self::resolve_shell_args(vm, task, yc, args, env).await?;
+                            let output = Self::run_command_pipeline(vm, task, yc, command, &sub_args, pipes, redirections, env, true).await?;
                             resolved.push(output.trim_end_matches('\n').to_string());
                         }
                         _ => {
-                            match self.exec_statement(task, yc, inner, env).await? {
+                            match Self::exec_statement(vm, task, yc, inner, env).await? {
                                 ControlFlow::ExprValue(v) => resolved.push(format!("{}", v)),
                                 ControlFlow::Return(v) => resolved.push(format!("{}", v)),
                                 _ => resolved.push(String::new()),
@@ -1203,7 +1267,7 @@ impl IshVm {
     }
 
     async fn run_command_pipeline(
-        &mut self,
+        vm: &Rc<RefCell<IshVm>>,
         task: &mut TaskContext,
         yc: &mut YieldContext,
         command: &str,
@@ -1229,7 +1293,7 @@ impl IshVm {
                 cmd.stderr(Stdio::piped());
 
                 let output = cmd.output().await.map_err(|e| {
-                    RuntimeError::system_error(format!("{}: {}", command, e), "E010")
+                    RuntimeError::system_error(format!("{}: {}", command, e), ErrorCode::ShellError)
                 })?;
 
                 let exit_code = output.status.code().unwrap_or(-1) as i64;
@@ -1238,7 +1302,7 @@ impl IshVm {
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             } else {
                 let status = cmd.status().await.map_err(|e| {
-                    RuntimeError::system_error(format!("{}: {}", command, e), "E010")
+                    RuntimeError::system_error(format!("{}: {}", command, e), ErrorCode::ShellError)
                 })?;
 
                 let exit_code = status.code().unwrap_or(-1) as i64;
@@ -1250,14 +1314,14 @@ impl IshVm {
             // Pipeline: chain commands via stdin/stdout
             cmd.stdout(Stdio::piped());
             let mut child = cmd.spawn().map_err(|e| {
-                RuntimeError::system_error(format!("{}: {}", command, e), "E010")
+                RuntimeError::system_error(format!("{}: {}", command, e), ErrorCode::ShellError)
             })?;
 
             let mut prev_stdout: Option<tokio::process::ChildStdout> = child.stdout.take();
 
             for (i, pipe) in pipes.iter().enumerate() {
                 let is_last = i == pipes.len() - 1;
-                let pipe_args = self.resolve_shell_args(task, yc, &pipe.args, env).await?;
+                let pipe_args = Self::resolve_shell_args(vm, task, yc, &pipe.args, env).await?;
                 let mut next_cmd = Command::new(&pipe.command);
                 next_cmd.args(&pipe_args);
 
@@ -1278,14 +1342,14 @@ impl IshVm {
                 }
 
                 let mut next_child = next_cmd.spawn().map_err(|e| {
-                    RuntimeError::system_error(format!("{}: {}", pipe.command, e), "E010")
+                    RuntimeError::system_error(format!("{}: {}", pipe.command, e), ErrorCode::ShellError)
                 })?;
 
                 prev_stdout = next_child.stdout.take();
 
                 if is_last {
                     let output = next_child.wait_with_output().await.map_err(|e| {
-                        RuntimeError::system_error(format!("{}: {}", pipe.command, e), "E010")
+                        RuntimeError::system_error(format!("{}: {}", pipe.command, e), ErrorCode::ShellError)
                     })?;
                     let exit_code = output.status.code().unwrap_or(-1) as i64;
                     env.define("__ish_last_exit_code".to_string(), Value::Int(exit_code));
@@ -1311,18 +1375,18 @@ impl IshVm {
 
     /// Call a function value with the given arguments (public entry point).
     pub async fn call_function(
-        &mut self,
+        vm: &Rc<RefCell<IshVm>>,
         func: &Value,
         args: &[Value],
     ) -> Result<Value, RuntimeError> {
         let mut task = TaskContext::new();
         let mut yc = YieldContext::new();
-        self.call_function_inner(&mut task, &mut yc, func, args).await
+        Self::call_function_inner(vm, &mut task, &mut yc, func, args).await
     }
 
     /// Internal call_function with explicit task/yield context.
     fn call_function_inner<'a>(
-        &'a mut self,
+        vm: &'a Rc<RefCell<IshVm>>,
         task: &'a mut TaskContext,
         yc: &'a mut YieldContext,
         func: &'a Value,
@@ -1331,71 +1395,74 @@ impl IshVm {
         Box::pin(async move {
         match func {
             Value::Function(f) => {
-                match &f.implementation {
-                    crate::value::FunctionImplementation::Interpreted(body) => {
-                        if args.len() != f.params.len() {
-                            return Err(RuntimeError::system_error(format!(
-                                "function '{}' expected {} arguments, got {}",
-                                f.name.as_deref().unwrap_or("anonymous"),
-                                f.params.len(),
-                                args.len()
-                            ), "E003"));
-                        }
-                        // Audit parameter types against annotations (when types feature active).
-                        for (i, (param_name, arg)) in f.params.iter().zip(args.iter()).enumerate() {
-                            let param_type = f.param_types.get(i).and_then(|t| t.as_ref());
-                            self.audit_type_annotation(param_name, arg, param_type)?;
-                        }
-                        // Create a new scope from the closure environment
-                        let call_env = f.closure_env.child();
-                        for (param, arg) in f.params.iter().zip(args.iter()) {
-                            call_env.define(param.clone(), arg.clone());
-                        }
-                        // Function-scoped defer: push a defer frame, run body,
-                        // then execute all deferred statements before returning.
-                        task.push_defer_frame();
-                        task.async_stack.push((f.is_async, f.name.clone().unwrap_or_else(|| "anonymous".to_string())));
-                        // Yield budget check at function call site
-                        yc.check_yield_budget().await;
-                        let result = self.exec_statement(task, yc, body, &call_env).await;
-                        self.pop_and_run_defers(task, yc).await;
-                        task.async_stack.pop();
-                        let return_val = match result? {
-                            ControlFlow::Return(v) => v,
-                            ControlFlow::ExprValue(v) => v,
-                            ControlFlow::None => Value::Null,
-                            ControlFlow::Throw(v) => {
-                                return Err(RuntimeError::thrown(v));
-                            }
-                        };
-                        // Audit return type.
-                        let fn_name = f.name.as_deref().unwrap_or("anonymous");
-                        self.audit_type_annotation(
-                            &format!("return of '{fn_name}'"),
-                            &return_val,
-                            f.return_type.as_ref(),
-                        )?;
-                        Ok(return_val)
+                // Arity check
+                if !f.params.is_empty() && args.len() != f.params.len() {
+                    return Err(RuntimeError::system_error(format!(
+                        "function '{}' expected {} arguments, got {}",
+                        f.name.as_deref().unwrap_or("anonymous"),
+                        f.params.len(),
+                        args.len()
+                    ), ErrorCode::ArgumentCountMismatch));
+                }
+                // Audit parameter types against annotations (when types feature active).
+                for (i, (param_name, arg)) in f.params.iter().zip(args.iter()).enumerate() {
+                    let param_type = f.param_types.get(i).and_then(|t| t.as_ref());
+                    Self::audit_type_annotation(vm, param_name, arg, param_type)?;
+                }
+
+                // Intercept ledger builtins that need VM access
+                let fn_name = f.name.as_deref().unwrap_or("");
+                match fn_name {
+                    "active_standard" => return Self::builtin_active_standard(vm, args),
+                    "feature_state" => return Self::builtin_feature_state(vm, args),
+                    "has_standard" => return Self::builtin_has_standard(vm, args),
+                    "has_entry_type" => return Self::builtin_has_entry_type(vm, args),
+                    "ledger_state" => return Self::builtin_ledger_state(vm, args),
+                    "has_entry" => return Self::builtin_has_entry(vm, args),
+                    "apply" if f.has_yielding_entry.is_some() => {
+                        return Self::builtin_apply(vm, task, yc, args).await;
                     }
-                    crate::value::FunctionImplementation::Compiled(shim) => {
-                        // Intercept ledger builtins that need VM access
-                        let fn_name = f.name.as_deref().unwrap_or("");
-                        match fn_name {
-                            "active_standard" => self.builtin_active_standard(args),
-                            "feature_state" => self.builtin_feature_state(args),
-                            "has_standard" => self.builtin_has_standard(args),
-                            "has_entry_type" => self.builtin_has_entry_type(args),
-                            "ledger_state" => self.builtin_ledger_state(args),
-                            "has_entry" => self.builtin_has_entry(args),
-                            _ => shim(args),
+                    _ => {}
+                }
+
+                // Call the shim for ALL functions (R1.7)
+                let _shim_result = (f.shim)(args)?;
+
+                // Check for pending interpreted execution
+                let pending = PENDING_INTERP_CALL.with(|cell| cell.borrow_mut().take());
+                if let Some(interp_call) = pending {
+                    // Interpreted function: async body execution
+                    task.push_defer_frame();
+                    task.async_stack.push((f.is_async, f.name.clone().unwrap_or_else(|| "anonymous".to_string())));
+                    yc.check_yield_budget().await;
+                    let result = Self::exec_statement(vm, task, yc, &interp_call.body, &interp_call.env).await;
+                    Self::pop_and_run_defers(vm, task, yc).await;
+                    task.async_stack.pop();
+                    let return_val = match result? {
+                        ControlFlow::Return(v) => v,
+                        ControlFlow::ExprValue(v) => v,
+                        ControlFlow::None => Value::Null,
+                        ControlFlow::Throw(v) => {
+                            return Err(RuntimeError::thrown(v));
                         }
-                    }
+                    };
+                    // Audit return type.
+                    let fn_name = f.name.as_deref().unwrap_or("anonymous");
+                    Self::audit_type_annotation(vm,
+                        &format!("return of '{fn_name}'"),
+                        &return_val,
+                        f.return_type.as_ref(),
+                    )?;
+                    Ok(return_val)
+                } else {
+                    // Compiled function: shim result is the final answer
+                    Ok(_shim_result)
                 }
             }
             _ => Err(RuntimeError::system_error(format!(
                 "cannot call {}",
                 func.type_name()
-            ), "E006")),
+            ), ErrorCode::NotCallable)),
         }
         }) // end Box::pin(async move { })
     }
@@ -1408,7 +1475,7 @@ impl IshVm {
     /// - If annotation is absent, report a discrepancy only when the `types`
     ///   feature is `required` in the active standard.
     fn audit_type_annotation(
-        &self,
+        vm: &Rc<RefCell<IshVm>>,
         item_name: &str,
         value: &Value,
         annotation: Option<&ish_ast::TypeAnnotation>,
@@ -1422,12 +1489,12 @@ impl IshVm {
                         item_name,
                         type_ann,
                         value.type_name()
-                    ), "E004"));
+                    ), ErrorCode::TypeMismatch));
                 }
             }
             None => {
                 // No annotation — only an error if annotation is required.
-                let features = self.ledger.active_features();
+                let features = vm.borrow().ledger.active_features();
                 if let Some(types_feature) = features.get("types") {
                     if types_feature.annotation
                         == crate::ledger::standard::AnnotationDimension::Required
@@ -1435,7 +1502,7 @@ impl IshVm {
                         return Err(RuntimeError::system_error(format!(
                             "missing type annotation for '{}' (required by active standard)",
                             item_name
-                        ), "E004"));
+                        ), ErrorCode::TypeMismatch));
                     }
                 }
             }
@@ -1444,26 +1511,58 @@ impl IshVm {
         Ok(())
     }
 
+    // ── Cross-boundary builtin (needs async VM access) ──────────────────────
+
+    /// apply(fn, args_list) -> calls fn with elements of args_list as arguments.
+    /// This creates the interpreted→compiled→interpreted boundary crossing path.
+    async fn builtin_apply<'a>(
+        vm: &'a Rc<RefCell<IshVm>>,
+        task: &'a mut TaskContext,
+        yc: &'a mut YieldContext,
+        args: &'a [Value],
+    ) -> Result<Value, RuntimeError> {
+        if args.len() != 2 {
+            return Err(RuntimeError::system_error(
+                "apply expects 2 arguments: a function and a list of arguments",
+                ErrorCode::ArgumentCountMismatch,
+            ));
+        }
+        let func = &args[0];
+        let arg_list = match &args[1] {
+            Value::List(list) => {
+                let items: Vec<Value> = list.borrow().iter().cloned().collect();
+                items
+            }
+            _ => {
+                return Err(RuntimeError::system_error(
+                    "apply expects a list as the second argument",
+                    ErrorCode::TypeMismatch,
+                ));
+            }
+        };
+        Self::call_function_inner(vm, task, yc, func, &arg_list).await
+    }
+
     // ── Ledger query builtins (need &self for ledger access) ────────────────
 
     /// active_standard() -> String | null
-    fn builtin_active_standard(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+    fn builtin_active_standard(vm: &Rc<RefCell<IshVm>>, args: &[Value]) -> Result<Value, RuntimeError> {
         if !args.is_empty() {
-            return Err(RuntimeError::system_error("active_standard expects 0 arguments", "E010"));
+            return Err(RuntimeError::system_error("active_standard expects 0 arguments", ErrorCode::ShellError));
         }
-        match self.ledger.active_standard() {
+        match vm.borrow().ledger.active_standard() {
             Some(name) => Ok(Value::String(Rc::new(name.to_string()))),
             None => Ok(Value::Null),
         }
     }
 
     /// feature_state(feature_name) -> String description | null
-    fn builtin_feature_state(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+    fn builtin_feature_state(vm: &Rc<RefCell<IshVm>>, args: &[Value]) -> Result<Value, RuntimeError> {
         if args.len() != 1 {
-            return Err(RuntimeError::system_error("feature_state expects 1 argument", "E010"));
+            return Err(RuntimeError::system_error("feature_state expects 1 argument", ErrorCode::ShellError));
         }
         if let Value::String(name) = &args[0] {
-            match self.ledger.feature_state(name) {
+            match vm.borrow().ledger.feature_state(name) {
                 Some(state) => {
                     let ann = match state.annotation {
                         crate::ledger::standard::AnnotationDimension::Optional => "optional",
@@ -1482,43 +1581,43 @@ impl IshVm {
                 None => Ok(Value::Null),
             }
         } else {
-            Err(RuntimeError::system_error("feature_state expects a string argument", "E004"))
+            Err(RuntimeError::system_error("feature_state expects a string argument", ErrorCode::TypeMismatch))
         }
     }
 
     /// has_standard(name) -> Bool
-    fn builtin_has_standard(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+    fn builtin_has_standard(vm: &Rc<RefCell<IshVm>>, args: &[Value]) -> Result<Value, RuntimeError> {
         if args.len() != 1 {
-            return Err(RuntimeError::system_error("has_standard expects 1 argument", "E010"));
+            return Err(RuntimeError::system_error("has_standard expects 1 argument", ErrorCode::ShellError));
         }
         if let Value::String(name) = &args[0] {
-            Ok(Value::Bool(self.ledger.standard_registry.get(name).is_some()))
+            Ok(Value::Bool(vm.borrow().ledger.standard_registry.get(name).is_some()))
         } else {
-            Err(RuntimeError::system_error("has_standard expects a string argument", "E004"))
+            Err(RuntimeError::system_error("has_standard expects a string argument", ErrorCode::TypeMismatch))
         }
     }
 
     /// has_entry_type(name) -> Bool
-    fn builtin_has_entry_type(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+    fn builtin_has_entry_type(vm: &Rc<RefCell<IshVm>>, args: &[Value]) -> Result<Value, RuntimeError> {
         if args.len() != 1 {
-            return Err(RuntimeError::system_error("has_entry_type expects 1 argument", "E010"));
+            return Err(RuntimeError::system_error("has_entry_type expects 1 argument", ErrorCode::ShellError));
         }
         if let Value::String(name) = &args[0] {
-            Ok(Value::Bool(self.ledger.entry_type_registry.get(name).is_some()))
+            Ok(Value::Bool(vm.borrow().ledger.entry_type_registry.get(name).is_some()))
         } else {
-            Err(RuntimeError::system_error("has_entry_type expects a string argument", "E004"))
+            Err(RuntimeError::system_error("has_entry_type expects a string argument", ErrorCode::TypeMismatch))
         }
     }
 
     /// ledger_state(variable_name) -> String
     /// Returns a string representation of all entries on a variable,
     /// e.g. "Type(i32), ExcludeNull".
-    fn builtin_ledger_state(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+    fn builtin_ledger_state(vm: &Rc<RefCell<IshVm>>, args: &[Value]) -> Result<Value, RuntimeError> {
         if args.len() != 1 {
-            return Err(RuntimeError::system_error("ledger_state expects 1 argument", "E010"));
+            return Err(RuntimeError::system_error("ledger_state expects 1 argument", ErrorCode::ShellError));
         }
         if let Value::String(name) = &args[0] {
-            let desc = match self.ledger.get_entries(name) {
+            let desc = match vm.borrow().ledger.get_entries(name) {
                 Some(es) => {
                     es.entries.iter().map(|e| {
                         if e.params.is_empty() {
@@ -1535,63 +1634,62 @@ impl IshVm {
             };
             Ok(Value::String(Rc::new(desc)))
         } else {
-            Err(RuntimeError::system_error("ledger_state expects a string argument", "E004"))
+            Err(RuntimeError::system_error("ledger_state expects a string argument", ErrorCode::TypeMismatch))
         }
     }
 
     /// has_entry(variable_name, entry_type) -> Bool
-    fn builtin_has_entry(&self, args: &[Value]) -> Result<Value, RuntimeError> {
+    fn builtin_has_entry(vm: &Rc<RefCell<IshVm>>, args: &[Value]) -> Result<Value, RuntimeError> {
         if args.len() != 2 {
-            return Err(RuntimeError::system_error("has_entry expects 2 arguments", "E010"));
+            return Err(RuntimeError::system_error("has_entry expects 2 arguments", ErrorCode::ShellError));
         }
         match (&args[0], &args[1]) {
             (Value::String(var), Value::String(entry_type)) => {
-                Ok(Value::Bool(self.ledger.has_entry(var, entry_type)))
+                Ok(Value::Bool(vm.borrow().ledger.has_entry(var, entry_type)))
             }
             _ => Err(RuntimeError::system_error(
-                "has_entry expects (string, string) arguments", "E004"
+                "has_entry expects (string, string) arguments", ErrorCode::TypeMismatch
             )),
         }
     }
 
     /// Evaluate a binary operation.
     fn eval_binary_op(
-        &self,
         op: &BinaryOperator,
         lhs: &Value,
         rhs: &Value,
     ) -> Result<Value, RuntimeError> {
         match op {
             // Arithmetic
-            BinaryOperator::Add => self.add(lhs, rhs),
-            BinaryOperator::Sub => self.arith(lhs, rhs, |a, b| a - b, |a, b| a - b),
-            BinaryOperator::Mul => self.arith(lhs, rhs, |a, b| a * b, |a, b| a * b),
+            BinaryOperator::Add => Self::add(lhs, rhs),
+            BinaryOperator::Sub => Self::arith(lhs, rhs, |a, b| a - b, |a, b| a - b),
+            BinaryOperator::Mul => Self::arith(lhs, rhs, |a, b| a * b, |a, b| a * b),
             BinaryOperator::Div => {
                 // Check for division by zero
                 match rhs {
-                    Value::Int(0) => return Err(RuntimeError::system_error("division by zero", "E002")),
+                    Value::Int(0) => return Err(RuntimeError::system_error("division by zero", ErrorCode::DivisionByZero)),
                     Value::Float(f) if *f == 0.0 => {
-                        return Err(RuntimeError::system_error("division by zero", "E002"))
+                        return Err(RuntimeError::system_error("division by zero", ErrorCode::DivisionByZero))
                     }
                     _ => {}
                 }
-                self.arith(lhs, rhs, |a, b| a / b, |a, b| a / b)
+                Self::arith(lhs, rhs, |a, b| a / b, |a, b| a / b)
             }
             BinaryOperator::Mod => {
                 match rhs {
-                    Value::Int(0) => return Err(RuntimeError::system_error("modulo by zero", "E002")),
+                    Value::Int(0) => return Err(RuntimeError::system_error("modulo by zero", ErrorCode::DivisionByZero)),
                     _ => {}
                 }
-                self.arith(lhs, rhs, |a, b| a % b, |a, b| a % b)
+                Self::arith(lhs, rhs, |a, b| a % b, |a, b| a % b)
             }
 
             // Comparison
             BinaryOperator::Eq => Ok(Value::Bool(lhs == rhs)),
             BinaryOperator::NotEq => Ok(Value::Bool(lhs != rhs)),
-            BinaryOperator::Lt => self.compare(lhs, rhs, |o| o.is_lt()),
-            BinaryOperator::Gt => self.compare(lhs, rhs, |o| o.is_gt()),
-            BinaryOperator::LtEq => self.compare(lhs, rhs, |o| !o.is_gt()),
-            BinaryOperator::GtEq => self.compare(lhs, rhs, |o| !o.is_lt()),
+            BinaryOperator::Lt => Self::compare(lhs, rhs, |o| o.is_lt()),
+            BinaryOperator::Gt => Self::compare(lhs, rhs, |o| o.is_gt()),
+            BinaryOperator::LtEq => Self::compare(lhs, rhs, |o| !o.is_gt()),
+            BinaryOperator::GtEq => Self::compare(lhs, rhs, |o| !o.is_lt()),
 
             // Logical (handled above via short-circuit, but just in case)
             BinaryOperator::And | BinaryOperator::Or => {
@@ -1600,7 +1698,7 @@ impl IshVm {
         }
     }
 
-    fn add(&self, lhs: &Value, rhs: &Value) -> Result<Value, RuntimeError> {
+    fn add(lhs: &Value, rhs: &Value) -> Result<Value, RuntimeError> {
         match (lhs, rhs) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
@@ -1622,12 +1720,11 @@ impl IshVm {
                 "cannot add {} and {}",
                 lhs.type_name(),
                 rhs.type_name()
-            ), "E004")),
+            ), ErrorCode::TypeMismatch)),
         }
     }
 
     fn arith(
-        &self,
         lhs: &Value,
         rhs: &Value,
         int_op: impl Fn(i64, i64) -> i64,
@@ -1642,12 +1739,11 @@ impl IshVm {
                 "cannot perform arithmetic on {} and {}",
                 lhs.type_name(),
                 rhs.type_name()
-            ), "E004")),
+            ), ErrorCode::TypeMismatch)),
         }
     }
 
     fn compare(
-        &self,
         lhs: &Value,
         rhs: &Value,
         pred: impl Fn(std::cmp::Ordering) -> bool,
@@ -1670,7 +1766,7 @@ impl IshVm {
                     "cannot compare {} and {}",
                     lhs.type_name(),
                     rhs.type_name()
-                ), "E004"))
+                ), ErrorCode::TypeMismatch))
             }
         };
         Ok(Value::Bool(pred(ordering)))
@@ -1739,19 +1835,19 @@ fn apply_redirections(cmd: &mut tokio::process::Command, redirections: &[Redirec
         match redir.kind {
             RedirectKind::StdoutWrite => {
                 let f = File::create(&redir.target).map_err(|e| {
-                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), "E008")
+                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), ErrorCode::IoError)
                 })?;
                 cmd.stdout(f);
             }
             RedirectKind::StdoutAppend => {
                 let f = OpenOptions::new().create(true).append(true).open(&redir.target).map_err(|e| {
-                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), "E008")
+                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), ErrorCode::IoError)
                 })?;
                 cmd.stdout(f);
             }
             RedirectKind::StderrWrite => {
                 let f = File::create(&redir.target).map_err(|e| {
-                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), "E008")
+                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), ErrorCode::IoError)
                 })?;
                 cmd.stderr(f);
             }
@@ -1761,10 +1857,10 @@ fn apply_redirections(cmd: &mut tokio::process::Command, redirections: &[Redirec
             }
             RedirectKind::AllWrite => {
                 let f = File::create(&redir.target).map_err(|e| {
-                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), "E008")
+                    RuntimeError::system_error(format!("redirect: {}: {}", redir.target, e), ErrorCode::IoError)
                 })?;
                 let f2 = f.try_clone().map_err(|e| {
-                    RuntimeError::system_error(format!("redirect: {}", e), "E008")
+                    RuntimeError::system_error(format!("redirect: {}", e), ErrorCode::IoError)
                 })?;
                 cmd.stdout(f);
                 cmd.stderr(f2);
@@ -1930,8 +2026,8 @@ mod tests {
             panic!("parse failed: {:?}", errs)
         });
 
-        let mut vm = IshVm::new();
-        vm.run(&program).await.unwrap()
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        IshVm::run(&vm, &program).await.unwrap()
     }
 
     #[tokio::test]
@@ -1941,8 +2037,8 @@ mod tests {
             .expr_stmt(Expression::ident("x"))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(42));
     }
 
@@ -1956,8 +2052,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(42));
     }
 
@@ -1977,8 +2073,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(42));
     }
 
@@ -2015,8 +2111,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(3628800));
     }
 
@@ -2046,8 +2142,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(15));
     }
 
@@ -2079,8 +2175,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(13));
     }
 
@@ -2120,8 +2216,8 @@ mod tests {
             .expr_stmt(Expression::ident("sum"))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(55));
     }
 
@@ -2138,8 +2234,8 @@ mod tests {
             .expr_stmt(Expression::ident("x"))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(1));
     }
 
@@ -2153,8 +2249,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::String(Rc::new("hello world".into())));
     }
 
@@ -2227,8 +2323,8 @@ mod tests {
             .stmt(Statement::throw(Expression::string("boom")))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await;
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("boom"));
     }
@@ -2246,8 +2342,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         // The result of the program is Null because try_catch itself
         // returns ControlFlow::None at the top level. The caught value
         // doesn't propagate as the program result.
@@ -2276,8 +2372,8 @@ mod tests {
             .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(42));
     }
 
@@ -2303,8 +2399,8 @@ mod tests {
             .expr_stmt(Expression::ident("x"))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(11));
     }
 
@@ -2332,8 +2428,8 @@ mod tests {
             .expr_stmt(Expression::ident("x"))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(11));
     }
 
@@ -2348,8 +2444,8 @@ mod tests {
             .expr_stmt(Expression::call(Expression::ident("bad"), vec![]))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await;
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await;
         assert!(result.is_err());
     }
 
@@ -2379,8 +2475,8 @@ mod tests {
             .expr_stmt(Expression::call(Expression::ident("wrapper"), vec![]))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(99));
     }
 
@@ -2416,8 +2512,8 @@ mod tests {
             Statement::expr_stmt(Expression::ident("closed")),
         ]);
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Bool(true));
     }
 
@@ -2461,8 +2557,8 @@ mod tests {
             Statement::expr_stmt(Expression::ident("closed")),
         ]);
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Bool(true));
     }
 
@@ -2492,8 +2588,8 @@ mod tests {
             .expr_stmt(Expression::ident("log"))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         if let Value::List(ref list_ref) = result {
             let list = list_ref.borrow();
             assert_eq!(list.len(), 2);
@@ -2528,8 +2624,8 @@ mod tests {
             .expr_stmt(Expression::ident("log"))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         if let Value::List(ref list_ref) = result {
             let list = list_ref.borrow();
             assert_eq!(list.len(), 2);
@@ -2581,8 +2677,8 @@ mod tests {
             .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         if let Value::List(ref list_ref) = result {
             let list = list_ref.borrow();
             assert_eq!(list.len(), 3);
@@ -2629,8 +2725,8 @@ mod tests {
             .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         if let Value::List(ref list_ref) = result {
             let list = list_ref.borrow();
             assert_eq!(list.len(), 3);
@@ -2685,8 +2781,8 @@ mod tests {
             .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         if let Value::List(ref list_ref) = result {
             let list = list_ref.borrow();
             assert_eq!(list.len(), 3);
@@ -2710,8 +2806,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Bool(true));
     }
 
@@ -2740,8 +2836,8 @@ mod tests {
             .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::String(Rc::new("boom".into())));
     }
 
@@ -2764,8 +2860,8 @@ mod tests {
             .expr_stmt(Expression::ident("x"))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Int(42));
     }
 
@@ -2777,8 +2873,8 @@ mod tests {
             .expr_stmt(Expression::char_lit('A'))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Char('A'));
     }
 
@@ -2792,8 +2888,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Bool(true));
     }
 
@@ -2807,8 +2903,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Bool(true));
     }
 
@@ -2822,8 +2918,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::String(Rc::new("Hi".into())));
     }
 
@@ -2836,8 +2932,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Char('A'));
     }
 
@@ -2850,8 +2946,8 @@ mod tests {
             ))
             .build();
 
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Char('A'));
     }
 
@@ -2873,8 +2969,8 @@ mod tests {
         let program = parse(source).unwrap_or_else(|errs| {
             panic!("parse failed: {:?}", errs)
         });
-        let mut vm = IshVm::new();
-        match vm.run(&program).await {
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        match IshVm::run(&vm, &program).await {
             Err(e) => format!("{}", e),
             Ok(v) => panic!("expected error, got: {:?}", v),
         }
@@ -3064,7 +3160,7 @@ x
     #[tokio::test]
     async fn system_error_has_message_and_code() {
         // RuntimeError::system_error creates an object with message and code
-        let err = RuntimeError::system_error("test message", "E001");
+        let err = RuntimeError::system_error("test message", ErrorCode::UnhandledThrow);
         assert!(err.thrown_value.is_some());
         let val = err.thrown_value.unwrap();
         if let Value::Object(ref obj) = val {
@@ -3087,8 +3183,8 @@ x
                 ])],
             ))
             .build();
-        let mut vm = IshVm::new();
-        assert_eq!(vm.run(&program).await.unwrap(), Value::Bool(true));
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        assert_eq!(IshVm::run(&vm, &program).await.unwrap(), Value::Bool(true));
     }
 
     #[tokio::test]
@@ -3102,8 +3198,8 @@ x
                 ])],
             ))
             .build();
-        let mut vm = IshVm::new();
-        assert_eq!(vm.run(&program).await.unwrap(), Value::Bool(false));
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        assert_eq!(IshVm::run(&vm, &program).await.unwrap(), Value::Bool(false));
     }
 
     #[tokio::test]
@@ -3117,8 +3213,8 @@ x
                 ])],
             ))
             .build();
-        let mut vm = IshVm::new();
-        assert_eq!(vm.run(&program).await.unwrap(), Value::Bool(false));
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        assert_eq!(IshVm::run(&vm, &program).await.unwrap(), Value::Bool(false));
     }
 
     #[tokio::test]
@@ -3130,8 +3226,8 @@ x
                 vec![Expression::string("hello")],
             ))
             .build();
-        let mut vm = IshVm::new();
-        assert_eq!(vm.run(&program).await.unwrap(), Value::Bool(false));
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        assert_eq!(IshVm::run(&vm, &program).await.unwrap(), Value::Bool(false));
     }
 
     #[tokio::test]
@@ -3145,8 +3241,8 @@ x
                 ])],
             ))
             .build();
-        let mut vm = IshVm::new();
-        assert_eq!(vm.run(&program).await.unwrap(), Value::String(Rc::new("oops".into())));
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        assert_eq!(IshVm::run(&vm, &program).await.unwrap(), Value::String(Rc::new("oops".into())));
     }
 
     #[tokio::test]
@@ -3161,8 +3257,8 @@ x
                 ])],
             ))
             .build();
-        let mut vm = IshVm::new();
-        assert_eq!(vm.run(&program).await.unwrap(), Value::String(Rc::new("E002".into())));
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        assert_eq!(IshVm::run(&vm, &program).await.unwrap(), Value::String(Rc::new("E002".into())));
     }
 
     #[tokio::test]
@@ -3176,8 +3272,8 @@ x
                 ])],
             ))
             .build();
-        let mut vm = IshVm::new();
-        assert_eq!(vm.run(&program).await.unwrap(), Value::Null);
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        assert_eq!(IshVm::run(&vm, &program).await.unwrap(), Value::Null);
     }
 
     #[tokio::test]
@@ -3189,8 +3285,8 @@ x
                 vec![Expression::int(42)],
             ))
             .build();
-        let mut vm = IshVm::new();
-        assert_eq!(vm.run(&program).await.unwrap(), Value::Null);
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        assert_eq!(IshVm::run(&vm, &program).await.unwrap(), Value::Null);
     }
 
     #[tokio::test]
@@ -3220,17 +3316,17 @@ test()
                 ("name", Expression::string("bad")),
             ])))
             .build();
-        let mut vm = IshVm::new();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
         // Use optional annotations so throw audit runs without type annotation errors
-        vm.ledger.standard_registry.register(
+        vm.borrow_mut().ledger.standard_registry.register(
             super::super::ledger::standard::Standard::new("audit_types")
                 .with_feature("types", super::super::ledger::standard::FeatureState::new(
                     super::super::ledger::standard::AnnotationDimension::Optional,
                     super::super::ledger::standard::AuditDimension::Runtime,
                 ))
         );
-        vm.ledger.push_standard("audit_types".to_string());
-        let result = vm.run(&program).await;
+        vm.borrow_mut().ledger.push_standard("audit_types".to_string());
+        let result = IshVm::run(&vm, &program).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.message.contains("throw audit"));
@@ -3256,8 +3352,8 @@ test()
             })
             .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
             .build();
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         // The message should contain "throw audit" to indicate wrapping occurred
         if let Value::String(s) = &result {
             assert!(s.contains("throw audit"), "expected throw audit message, got: {}", s);
@@ -3293,8 +3389,8 @@ test()
             })
             .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
             .build();
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::String(Rc::new("E002".into())));
     }
 
@@ -3325,8 +3421,8 @@ test()
             })
             .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
             .build();
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         assert_eq!(result, Value::Bool(true));
     }
 
@@ -3357,8 +3453,8 @@ test()
             })
             .expr_stmt(Expression::call(Expression::ident("test"), vec![]))
             .build();
-        let mut vm = IshVm::new();
-        let result = vm.run(&program).await.unwrap();
+        let vm = Rc::new(RefCell::new(IshVm::new()));
+        let result = IshVm::run(&vm, &program).await.unwrap();
         // Division by zero message
         if let Value::String(ref s) = result {
             assert!(s.contains("zero") || s.contains("division"),
@@ -3377,8 +3473,8 @@ test()
             panic!("parse failed: {:?}", errs)
         });
         local.run_until(async {
-            let mut vm = IshVm::new();
-            vm.run(&program).await
+            let vm = Rc::new(RefCell::new(IshVm::new()));
+            IshVm::run(&vm, &program).await
         }).await
     }
 

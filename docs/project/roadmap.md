@@ -38,6 +38,7 @@ The language is being designed iteratively. A Rust prototype explores key ideas.
 - [x] Concurrency design (cooperative multitasking, async/await, Tokio runtime, shell architecture)
 - [x] Concurrency prototype (async/await/spawn/yield, Tokio LocalSet, two-thread shell, yield budget, ledger integration)
 - [x] Concurrency correctness fixes (FutureRef equality, grammar-level await/spawn, compiled functions)
+- [x] Runtime extraction (shim-only architecture, ish-core, ish-runtime type extraction, ErrorCode enum, apply builtin)
 
 ### In Progress
 

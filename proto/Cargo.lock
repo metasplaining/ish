@@ -338,6 +338,7 @@ dependencies = [
 name = "ish-ast"
 version = "0.1.0"
 dependencies = [
+ "ish-core",
  "serde",
  "serde_json",
 ]
@@ -354,6 +355,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ish-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "ish-parser"
 version = "0.1.0"
 dependencies = [
@@ -366,8 +374,9 @@ dependencies = [
 name = "ish-runtime"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
+ "gc",
+ "ish-core",
+ "tokio",
 ]
 
 [[package]]
@@ -400,6 +409,7 @@ dependencies = [
  "gc",
  "ish-ast",
  "ish-parser",
+ "ish-runtime",
  "serde_json",
  "tokio",
 ]

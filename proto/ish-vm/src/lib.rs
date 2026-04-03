@@ -1,9 +1,11 @@
 // ish-vm: Tree-walking interpreter for the ish language prototype.
 
-pub mod value;
+// Re-export runtime types for backward compatibility.
+pub use ish_runtime::value;
+pub use ish_runtime::error;
+
 pub mod environment;
 pub mod interpreter;
-pub mod error;
 pub mod builtins;
 pub mod reflection;
 pub mod ledger;

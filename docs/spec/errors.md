@@ -205,7 +205,7 @@ When the `types` feature is active, error entries participate in type checking:
 
 ### Error Codes
 
-Well-known error codes are documented in [docs/errors/INDEX.md](../errors/INDEX.md). Each code maps to a domain error subtype:
+Well-known error codes are documented in [docs/errors/INDEX.md](../errors/INDEX.md). Each code maps to a domain error subtype. The runtime crate (`ish-runtime`) defines an `ErrorCode` enum with a type-safe variant for each code (e.g., `ErrorCode::DivisionByZero` for E002).
 
 | Code | Domain subtype | Description |
 |------|---------------|-------------|
