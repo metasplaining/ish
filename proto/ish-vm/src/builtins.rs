@@ -64,17 +64,39 @@ fn register_ledger(env: &Environment) {
 
 // ── Cross-boundary function call ────────────────────────────────────────────
 // apply(fn, args_list) calls fn with elements of args_list as arguments.
-// Like ledger builtins, the actual logic is intercepted in interpreter.rs
-// because it needs async VM access to call the target function.
+// Since shims are self-contained, apply just calls the target function's shim
+// directly, returning either Value::Future (yielding) or the result (unyielding).
 
 fn register_apply(env: &Environment) {
     env.define(
         "apply".into(),
-        new_compiled_function("apply", vec!["fn".into(), "args".into()], vec![], None, |_args| {
-            Err(RuntimeError::system_error(
-                "apply must be intercepted by the interpreter",
-                ErrorCode::TypeMismatch,
-            ))
+        new_compiled_function("apply", vec!["fn".into(), "args".into()], vec![], None, |args| {
+            if args.len() != 2 {
+                return Err(RuntimeError::system_error(
+                    "apply expects 2 arguments: a function and a list of arguments",
+                    ErrorCode::ArgumentCountMismatch,
+                ));
+            }
+            let func = &args[0];
+            let arg_list = match &args[1] {
+                Value::List(list) => {
+                    let items: Vec<Value> = list.borrow().iter().cloned().collect();
+                    items
+                }
+                _ => {
+                    return Err(RuntimeError::system_error(
+                        "apply expects a list as the second argument",
+                        ErrorCode::TypeMismatch,
+                    ));
+                }
+            };
+            match func {
+                Value::Function(f) => (f.shim)(&arg_list),
+                _ => Err(RuntimeError::system_error(
+                    format!("apply first argument must be a function, got {}", func.type_name()),
+                    ErrorCode::TypeMismatch,
+                )),
+            }
         }, Some(false)),
     );
 }

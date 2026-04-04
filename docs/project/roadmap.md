@@ -42,6 +42,7 @@ The language is being designed iteratively. A Rust prototype explores key ideas.
 
 ### In Progress
 
+- [ ] Stubbed code analyzer and yielding/unyielding function refactoring (PENDING_INTERP_CALL removal)
 - [ ] Memory management design (GC vs. manual vs. arena)
 - [ ] Polymorphism strategy (structural vs. nominal interplay)
 

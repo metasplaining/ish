@@ -64,16 +64,48 @@ The VM is accessed via `Rc<RefCell<IshVm>>` throughout the interpreter, builtins
 |--------|-------------|
 | `IshVm::new()` | Creates VM, registers all builtins + AST factory functions |
 | `IshVm::run(vm, &Program)` | Execute a program, return last expression's value |
-| `IshVm::eval_expression(vm, &Expression, &Environment)` | Evaluate a single expression |
-| `IshVm::call_function(vm, &Value, &[Value])` | Call a function value with arguments |
+| `IshVm::eval_expression_yielding(vm, &Expression, &Environment)` | Evaluate a single expression (async) |
+| `IshVm::eval_expression_unyielding(vm, &Expression, &Environment)` | Evaluate a single expression (sync) |
+| `IshVm::call_function(vm, &Value, &[Value])` | Call a function value with arguments (sync) |
 
 ### Shim-Only Function Dispatch
 
-All functions — builtins and interpreted — are called uniformly via `(func.shim)(args)`. There is no dispatch on implementation variant. When the interpreter declares an interpreted function (`Statement::FunctionDecl`, `Expression::FunctionExpr`), it creates a shim closure that captures the body statement, closure environment, and `Rc<RefCell<IshVm>>`. The shim, when called, borrows the VM, creates a child scope from the captured environment, binds parameters, and executes the body.
+All functions — builtins and interpreted — are called uniformly via `(func.shim)(args)`. There is no dispatch on implementation variant. Shims are self-contained: they capture everything needed to execute the function body.
 
-Arity checking, parameter type auditing, and return type auditing still occur around shim invocation in `call_function`.
+When the interpreter declares an interpreted function (`Statement::FunctionDecl`, `Expression::Lambda`), the code analyzer classifies it as yielding or unyielding, then the VM creates the appropriate shim:
+
+- **Unyielding shims** capture the VM reference, body statement, closure environment, and parameter names. When called, the shim creates a child scope, binds parameters, and calls `exec_statement_unyielding` synchronously to execute the body.
+- **Yielding shims** capture the same data. When called, the shim uses `tokio::task::spawn_local` to spawn an async task that executes the body via `exec_statement_yielding`, wraps the `JoinHandle` in a `FutureRef`, and returns `Value::Future`.
+
+Arity checking, parameter type auditing, and return type auditing still occur around shim invocation in `call_function_inner`, which is synchronous.
 
 **Control flow** uses `ControlFlow::None`, `ControlFlow::Return(Value)`, `ControlFlow::ExprValue(Value)`, `ControlFlow::Throw(Value)`.
+
+### Code Analyzer (`analyzer.rs`)
+
+The code analyzer classifies functions as yielding or unyielding at declaration time. It is a stub implementation — future versions will add type inference, reachability analysis, and other passes.
+
+The analyzer walks the function body AST looking for yielding nodes:
+- `Expression::Await`, `Expression::Spawn`, `Statement::Yield`, `Expression::CommandSubstitution`
+- `Expression::FunctionCall` where the callee resolves to a yielding function in the environment
+
+Functions declared `async` are immediately classified as yielding without body analysis. The analyzer does not recurse into nested `FunctionDecl` or `Lambda` bodies — those are classified independently when they are declared.
+
+**Known limitations:**
+- No forward references: all functions must be declared before they are called.
+- No call cycles: mutually recursive functions are not supported.
+- Only direct `Identifier` calls are analyzed; indirect calls (through variables, higher-order functions) are not checked.
+
+### Execution Variants
+
+The interpreter has two parallel execution paths:
+
+| Variant | Functions | Description |
+|---------|-----------|-------------|
+| Yielding | `exec_statement_yielding`, `eval_expression_yielding` | Async (`Pin<Box<dyn Future>>`). Supports `await`, `spawn`, `yield`, command substitution. Performs implied await on bare function calls that return `Value::Future`. |
+| Unyielding | `exec_statement_unyielding`, `eval_expression_unyielding` | Synchronous. Errors on `await`, `spawn`, `yield`, and command substitution nodes. No `YieldContext` parameter. |
+
+Both variants share extracted helper functions for pure computations (binary/unary ops, variable definition, etc.). The yielding variant is used by `run()` and yielding shims; the unyielding variant is used by unyielding shims.
 
 ### Async Execution
 
@@ -104,7 +136,7 @@ In interactive mode, `println` and expression result display route through Reedl
 The `Throw` statement evaluates its expression, performs a throw audit (auto-adds `@Error` entry if the value has `message: String` — see [docs/spec/errors.md](../spec/errors.md)), and returns `ControlFlow::Throw(value)`. This unwinds through blocks, loops, and other statements until it reaches either:
 
 - A `TryCatch` statement, which catches the throw, binds the value to the catch clause's parameter, and executes the catch body.
-- A function boundary, where `call_function` converts `ControlFlow::Throw(v)` into `Err(RuntimeError::thrown(v))`. The `TryCatch` handler also catches these `RuntimeError`s with `thrown_value`, so try/catch works across function calls.
+- A function boundary, where `call_function_inner` converts `ControlFlow::Throw(v)` into `Err(RuntimeError::thrown(v))`. The `TryCatch` handler also catches these `RuntimeError`s with `thrown_value`, so try/catch works across function calls.
 
 The throw audit only adds `@Error` entries. Other error classifications (`CodedError`, `TypeError`, `FileError`, etc.) are ordinary ish types recognized structurally by the type system, not by the throw audit.
 
@@ -135,13 +167,13 @@ The throw audit only adds `@Error` entries. Other error classifications (`CodedE
 | Errors | `is_error`, `error_message`, `error_code` | `Some(false)` |
 | Ledger | `active_standard`, `feature_state`, `has_standard`, `has_entry_type` | `Some(false)` |
 
-**Unified dispatch:** `call_function` handles all functions via a single `Value::Function` match arm. Arity checking and parameter type auditing apply uniformly to builtins and user-defined functions. All functions are invoked via `(func.shim)(args)` — there is no dispatch on implementation variant.
+**Unified dispatch:** `call_function_inner` handles all functions via a single `Value::Function` match arm. It is synchronous — shims handle their own async execution internally. Arity checking and parameter type auditing apply uniformly to builtins and user-defined functions. All functions are invoked via `(func.shim)(args)` — there is no dispatch on implementation variant.
 
-**Ledger builtins** need VM access (they query `self.ledger`), so they are intercepted by name in `call_function` *before* the shim invocation. Stub shims are registered so the names are callable and metadata is available; reaching the stub body is an error.
+**Ledger builtins** need VM access (they query `self.ledger`), so they are intercepted by name in `call_function_inner` *before* the shim invocation. Stub shims are registered so the names are callable and metadata is available; reaching the stub body is an error.
 
-**Implied await:** When a shim returns `Value::Future` from a bare function call (not under `await` or `spawn`), the `FunctionCall` handler checks the `await_required` feature. If not active, the future is immediately awaited (implied await). If active, the future is returned as-is. This makes parallel builtins backward-compatible at low assurance.
+**`apply`** is a normal compiled function — it calls `(f.shim)(&args)` directly. If the target function is yielding, `apply` returns `Value::Future`; if unyielding, it returns the result directly. There is no special-case intercept for `apply`.
 
-**I/O completion:** Parallel shim futures do not resolve until the I/O operation is actually complete. In interactive mode, the shim sends output plus a `oneshot` acknowledgment channel; the future resolves only after the shell confirms the write.
+**Implied await:** When `call_function_inner` returns `Value::Future` from a bare function call (not under `await` or `spawn`), the yielding `eval_expression` path awaits the future automatically. In the unyielding path, `Value::Future` is returned as-is (this would only occur if the caller explicitly invokes a yielding shim through `apply`). The `await_required` feature check applies at higher assurance levels.
 
 ---
 

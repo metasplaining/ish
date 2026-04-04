@@ -41,7 +41,7 @@ assert_output "async fn passes async_annotation audit" "ok" "$output"
 
 # --- future_drop: no discrepancy at low assurance ---
 output=$(run_ish '
-fn work() { return 1 }
+async fn work() { return 1 }
 spawn work()
 println("ok")
 ')
@@ -51,7 +51,7 @@ assert_output "future_drop optional at streamlined" "ok" "$output"
 output=$(run_ish '
 standard strict_drop [ future_drop(required, runtime) ]
 @standard[strict_drop] {
-  fn work() { return 1 }
+  async fn work() { return 1 }
   spawn work()
 }
 ')
@@ -61,7 +61,7 @@ assert_output_contains "future_drop required" "dropped without" "$output"
 output=$(run_ish '
 standard strict_drop [ future_drop(required, runtime) ]
 @standard[strict_drop] {
-  fn work() { return 1 }
+  async fn work() { return 1 }
   await work()
   println("ok")
 }

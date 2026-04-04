@@ -75,11 +75,10 @@ Before executing the call, the interpreter checks the callee's yielding classifi
 
 | Callee classification | `await` behavior | `spawn` behavior |
 |----------------------|------------------|------------------|
-| Explicitly yielding (`has_yielding_entry: Some(true)`) | Normal await — call, then await the resulting `Future` | Normal spawn — spawn a task that calls the function |
-| Explicitly unyielding (`has_yielding_entry: Some(false)`) | **E012** — thrown before calling | **E013** — thrown before calling |
-| Ambiguous (no Yielding entry, `has_yielding_entry: None`) | Call proceeds; if result is `Future`, await it; if non-`Future`, pass through | Call proceeds; spawns a task that calls the function |
+| Yielding (`has_yielding_entry: Some(true)`) | Normal await — call, then await the resulting `Future` | Normal spawn — return the `Future` from the shim directly |
+| Unyielding (`has_yielding_entry: Some(false)` or `None`) | **E012** — thrown before calling | **E013** — thrown before calling |
 
-The ambiguous case exists because the prototype does not yet categorize all functions as yielding or unyielding at declaration time. Functions without explicit annotations (`async` or `@[unyielding]`) have no Yielding entry. See open question on function yielding categorization in [docs/project/open-questions.md](../project/open-questions.md).
+The `has_yielding_entry` field on `IshFunction` uses `Option<bool>` for historical reasons. `None` is treated identically to `Some(false)` (unyielding). All newly declared functions are classified by the code analyzer at declaration time and receive `Some(true)` or `Some(false)`; `None` only appears on legacy or externally constructed function values.
 
 ### Future Identity Equality
 
@@ -92,6 +91,8 @@ Two `Future` values are equal if and only if they reference the same underlying 
 ### Implied Await
 
 At low assurance (when the `await_required` feature is not active), calling a function that returns a `Future` without explicit `await` or `spawn` triggers an **implied await**: the interpreter immediately awaits the future and returns the resolved value. This makes parallel builtins like `println` backward-compatible — `println("hello")` works without `await`.
+
+When `call_function_inner` returns a `Value::Future` from a bare function call (no `await` or `spawn`), the yielding interpreter path implicitly awaits the future. This is the mechanism that propagates yielding through function calls: if function `A` calls yielding function `B` without `await`, the code analyzer classifies `A` as yielding, and the yielding interpreter path handles the implied await.
 
 At high assurance (when `await_required` is `required`), no implied await occurs. The `Future` is returned as-is, and the unawaited-future audit detects it.
 

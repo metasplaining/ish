@@ -62,6 +62,8 @@ pub struct IshFunction {
 }
 ```
 
+`has_yielding_entry` uses `Option<bool>` where `Some(true)` means yielding, `Some(false)` means unyielding, and `None` is treated as unyielding. All functions declared by the interpreter receive `Some(true)` or `Some(false)` via the code analyzer; `None` only appears on externally constructed function values.
+
 **Shim types** (behavioral, not structural — all use the same `Shim` type):
 - **Unyielding shims** (`len`, `type_of`, etc.) — call logic directly, return a plain `Value`.
 - **Yielding shims** — spawn work via `spawn_local`, return `Value::Future`.

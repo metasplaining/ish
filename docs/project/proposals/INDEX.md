@@ -35,7 +35,7 @@ Structured proposals generated from prompt files using the `/propose` skill. Eac
 | 2026-03-23 | Concurrency | proposal | [concurrency.md](concurrency.md) |
 | 2026-04-01 | Concurrency Correctness Fixes | proposal | [concurrency-correctness.md](concurrency-correctness.md) |
 | 2026-04-02 | Runtime Extraction | accepted | [runtime-extraction.md](runtime-extraction.md) |
-| 2026-04-03 | Stubbed Analyzer and Yielding/Unyielding Function Refactoring | proposal | [stubbed-analyzer.md](stubbed-analyzer.md) |
+| 2026-04-03 | Stubbed Analyzer and Yielding/Unyielding Function Refactoring | accepted | [stubbed-analyzer.md](stubbed-analyzer.md) |
 
 ---
 

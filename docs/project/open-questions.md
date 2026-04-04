@@ -274,7 +274,7 @@ See also [docs/spec/polymorphism.md — Open Questions](../spec/polymorphism.md#
 
 - [ ] **AST primitives.** Loops, match/switch, return, struct/type definitions, imports, error handling, annotations — are these all AST nodes?
 - [ ] **Linker role.** Loading modules at runtime? Resolving imports?
-- [ ] **Code analyzer scope.** What metadata is produced?
+- [x] **~~Code analyzer scope.~~** Partially resolved — the stub analyzer produces yielding classification (`Some(true)` or `Some(false)`) for every function at declaration time. Further analysis passes (type inference, purity, etc.) are future work. See [docs/architecture/vm.md](../architecture/vm.md) § Code Analyzer.
 - [ ] **Rust generator output.** Idiomatic Rust? Human-readable?
 - [ ] **Bootstrapping strategy.** What is written in Rust vs. ish? When does self-hosting begin?
 
@@ -303,7 +303,7 @@ See also [docs/spec/concurrency.md — Open Questions](../spec/concurrency.md#op
 
 - [ ] **Program exit with running futures.** When the main program finishes but spawned futures are still running, should the runtime wait for them, cancel them, or apply a timeout?
 - [ ] **FFI and blocking.** If ish supports arbitrary C/Rust FFI calls, blocking may need reintroduction — a blocking FFI call on the LocalSet thread would stall all ish tasks.
-- [ ] **Function yielding categorization at declaration.** Every function should eventually be categorized as `yielding` or `unyielding` at declaration time. Currently, functions without explicit annotations have no Yielding entry. This means `await ambiguous_fn()` silently passes through non-Future values. When function declaration categorization is implemented, `await` should check the callee's category and E012 should be thrown for all unyielding calls — eliminating the ambiguous pass-through case. See concurrency-correctness proposal Decisions 2–3.
+- [x] **~~Function yielding categorization at declaration.~~** Resolved — the stub code analyzer classifies all functions as yielding or unyielding at declaration time by walking the function body for yielding nodes (await, spawn, yield, shell commands, command substitution) and checking callee yielding status. `await` and `spawn` now enforce classification via E012/E013. See [docs/architecture/vm.md](../architecture/vm.md) § Code Analyzer and the [stubbed-analyzer plan](plans/stubbed-analyzer.md).
 - [ ] **Builtin replacement by standard library.** All builtins are temporary scaffolding. They should be replaced by standard library functions when the standard library is available. Parallel builtins should become parallel stdlib functions. See concurrency-correctness proposal Decision 7.
 
 ---

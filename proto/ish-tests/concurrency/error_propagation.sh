@@ -7,7 +7,7 @@ echo "concurrency / error_propagation"
 
 # --- Error in awaited function propagates to caller ---
 output=$(run_ish '
-fn failing() { throw { message: "oops" } }
+async fn failing() { throw { message: "oops" } }
 try {
   await failing()
 } catch (e) {
@@ -29,7 +29,7 @@ assert_output "sync error propagates normally" "caught: sync_err" "$output"
 
 # --- try/catch around await catches error ---
 output=$(run_ish '
-fn work() { throw { message: "async_err" } }
+async fn work() { throw { message: "async_err" } }
 try {
   let r = await work()
   println("should not reach")
@@ -41,7 +41,7 @@ assert_output "try catch around await" "async_err" "$output"
 
 # --- defer runs even when awaited function errors ---
 output=$(run_ish '
-fn work() {
+async fn work() {
   defer println("cleanup")
   throw { message: "err" }
 }
@@ -55,8 +55,8 @@ assert_output "defer runs on awaited task error" $'cleanup\nerr' "$output"
 
 # --- Nested error propagation through await chain ---
 output=$(run_ish '
-fn inner() { throw { message: "deep" } }
-fn outer() {
+async fn inner() { throw { message: "deep" } }
+async fn outer() {
   return await inner()
 }
 try {
@@ -69,8 +69,8 @@ assert_output "nested error propagation" "got: deep" "$output"
 
 # --- Successful result after catching previous error ---
 output=$(run_ish '
-fn failing() { throw { message: "fail" } }
-fn success() { return 42 }
+async fn failing() { throw { message: "fail" } }
+async fn success() { return 42 }
 try { await failing() } catch (e) { println("err: " + e.message) }
 let r = await success()
 println(r)

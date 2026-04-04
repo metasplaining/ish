@@ -14,18 +14,6 @@ use crate::value::*;
 use crate::builtins;
 use crate::ledger::LedgerState;
 
-/// Pending interpreted function execution. When an interpreted function's shim
-/// is called, it prepares the child scope and stores the body + env here.
-/// `call_function_inner` picks it up and does the async body execution.
-struct InterpCall {
-    body: Statement,
-    env: Environment,
-}
-
-thread_local! {
-    static PENDING_INTERP_CALL: RefCell<Option<InterpCall>> = RefCell::new(None);
-}
-
 /// Signal for control flow: normal completion, return, throw, or break.
 enum ControlFlow {
     None,
@@ -160,7 +148,7 @@ impl IshVm {
     async fn pop_and_run_defers(vm: &Rc<RefCell<IshVm>>, task: &mut TaskContext, yc: &mut YieldContext) {
         if let Some(deferred) = task.defer_stack.pop() {
             for (d, env) in deferred.into_iter().rev() {
-                let _ = Self::exec_statement(vm, task, yc, &d, &env).await;
+                let _ = Self::exec_statement_yielding(vm, task, yc, &d, &env).await;
             }
         }
     }
@@ -173,7 +161,7 @@ impl IshVm {
         let env = vm.borrow().global_env.clone();
         task.push_defer_frame();
         for stmt in &program.statements {
-            match Self::exec_statement(vm, &mut task, &mut yc, stmt, &env).await {
+            match Self::exec_statement_yielding(vm, &mut task, &mut yc, stmt, &env).await {
                 Ok(ControlFlow::Return(v)) => {
                     last = v;
                     break;
@@ -212,7 +200,7 @@ impl IshVm {
     }
 
     /// Execute a single statement in the given environment.
-    fn exec_statement<'a>(
+    fn exec_statement_yielding<'a>(
         vm: &'a Rc<RefCell<IshVm>>,
         task: &'a mut TaskContext,
         yc: &'a mut YieldContext,
@@ -222,20 +210,20 @@ impl IshVm {
         Box::pin(async move {
         match stmt {
             Statement::VariableDecl { name, value, type_annotation, .. } => {
-                let val = Self::eval_expression(vm, task, yc, value, env).await?;
+                let val = Self::eval_expression_yielding(vm, task, yc, value, env).await?;
                 Self::audit_type_annotation(vm, name, &val, type_annotation.as_ref())?;
                 env.define(name.clone(), val);
                 Ok(ControlFlow::None)
             }
 
             Statement::Assignment { target, value } => {
-                let val = Self::eval_expression(vm, task, yc, value, env).await?;
+                let val = Self::eval_expression_yielding(vm, task, yc, value, env).await?;
                 match target {
                     AssignTarget::Variable(name) => {
                         env.set(name, val)?;
                     }
                     AssignTarget::Property { object, property } => {
-                        let obj = Self::eval_expression(vm, task, yc, object, env).await?;
+                        let obj = Self::eval_expression_yielding(vm, task, yc, object, env).await?;
                         if let Value::Object(ref obj_ref) = obj {
                             obj_ref.borrow_mut().insert(property.clone(), val);
                         } else {
@@ -247,8 +235,8 @@ impl IshVm {
                         }
                     }
                     AssignTarget::Index { object, index } => {
-                        let obj = Self::eval_expression(vm, task, yc, object, env).await?;
-                        let idx = Self::eval_expression(vm, task, yc, index, env).await?;
+                        let obj = Self::eval_expression_yielding(vm, task, yc, object, env).await?;
+                        let idx = Self::eval_expression_yielding(vm, task, yc, index, env).await?;
                         if let Value::List(ref list_ref) = obj {
                             if let Value::Int(i) = idx {
                                 let mut list = list_ref.borrow_mut();
@@ -291,7 +279,7 @@ impl IshVm {
                         task.register_defer(*body.clone(), block_env.clone());
                         continue;
                     }
-                    match Self::exec_statement(vm, task, yc, s, &block_env).await? {
+                    match Self::exec_statement_yielding(vm, task, yc, s, &block_env).await? {
                         ControlFlow::Return(v) => { result = ControlFlow::Return(v); break; }
                         ControlFlow::Throw(v) => { result = ControlFlow::Throw(v); break; }
                         ControlFlow::None | ControlFlow::ExprValue(_) => {}
@@ -305,7 +293,7 @@ impl IshVm {
                 then_block,
                 else_block,
             } => {
-                let cond = Self::eval_expression(vm, task, yc, condition, env).await?;
+                let cond = Self::eval_expression_yielding(vm, task, yc, condition, env).await?;
 
                 // Type narrowing: always analyze the condition and apply
                 // narrowing facts.  Entry maintenance is unconditional.
@@ -329,7 +317,7 @@ impl IshVm {
                             }
                         }
                     }
-                    let result = Self::exec_statement(vm, task, yc, then_block, env).await;
+                    let result = Self::exec_statement_yielding(vm, task, yc, then_block, env).await;
                     let then_entries = vm.borrow().ledger.save_entries();
                     {
                         let mut vm_mut = vm.borrow_mut();
@@ -351,7 +339,7 @@ impl IshVm {
                             NarrowingFact::IsNull { .. } => {}
                         }
                     }
-                    let result = Self::exec_statement(vm, task, yc, eb, env).await;
+                    let result = Self::exec_statement_yielding(vm, task, yc, eb, env).await;
                     let else_entries = vm.borrow().ledger.save_entries();
                     {
                         let mut vm_mut = vm.borrow_mut();
@@ -368,7 +356,7 @@ impl IshVm {
             Statement::While { condition, body, yield_every } => {
                 // Evaluate yield_every count if present
                 let yield_every_n = if let Some(ye_expr) = yield_every {
-                    match Self::eval_expression(vm, task, yc, ye_expr, env).await? {
+                    match Self::eval_expression_yielding(vm, task, yc, ye_expr, env).await? {
                         Value::Int(n) if n > 0 => Some(n as u64),
                         _ => None,
                     }
@@ -377,7 +365,7 @@ impl IshVm {
                 };
                 let mut iteration: u64 = 0;
                 loop {
-                    let cond = Self::eval_expression(vm, task, yc, condition, env).await?;
+                    let cond = Self::eval_expression_yielding(vm, task, yc, condition, env).await?;
                     if !cond.is_truthy() {
                         break;
                     }
@@ -391,7 +379,7 @@ impl IshVm {
                             yc.reset_budget();
                         }
                     }
-                    match Self::exec_statement(vm, task, yc, body, env).await? {
+                    match Self::exec_statement_yielding(vm, task, yc, body, env).await? {
                         ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
                         ControlFlow::Throw(v) => return Ok(ControlFlow::Throw(v)),
                         ControlFlow::None | ControlFlow::ExprValue(_) => {}
@@ -406,10 +394,10 @@ impl IshVm {
                 body,
                 yield_every,
             } => {
-                let iter_val = Self::eval_expression(vm, task, yc, iterable, env).await?;
+                let iter_val = Self::eval_expression_yielding(vm, task, yc, iterable, env).await?;
                 // Evaluate yield_every count if present
                 let yield_every_n = if let Some(ye_expr) = yield_every {
-                    match Self::eval_expression(vm, task, yc, ye_expr, env).await? {
+                    match Self::eval_expression_yielding(vm, task, yc, ye_expr, env).await? {
                         Value::Int(n) if n > 0 => Some(n as u64),
                         _ => None,
                     }
@@ -432,7 +420,7 @@ impl IshVm {
                                 yc.reset_budget();
                             }
                         }
-                        match Self::exec_statement(vm, task, yc, body, &loop_env).await? {
+                        match Self::exec_statement_yielding(vm, task, yc, body, &loop_env).await? {
                             ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
                             ControlFlow::Throw(v) => return Ok(ControlFlow::Throw(v)),
                             ControlFlow::None | ControlFlow::ExprValue(_) => {}
@@ -449,7 +437,7 @@ impl IshVm {
 
             Statement::Return { value } => {
                 let val = if let Some(expr) = value {
-                    Self::eval_expression(vm, task, yc, expr, env).await?
+                    Self::eval_expression_yielding(vm, task, yc, expr, env).await?
                 } else {
                     Value::Null
                 };
@@ -457,7 +445,7 @@ impl IshVm {
             }
 
             Statement::ExpressionStmt(expr) => {
-                let val = Self::eval_expression(vm, task, yc, expr, env).await?;
+                let val = Self::eval_expression_yielding(vm, task, yc, expr, env).await?;
                 Ok(ControlFlow::ExprValue(val))
             }
 
@@ -467,31 +455,97 @@ impl IshVm {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
                     params.iter().map(|p| p.type_annotation.clone()).collect();
-                // If declared inside @[unyielding], classify as unyielding.
-                let has_yielding_entry = if yc.unyielding_depth > 0 {
-                    Some(false)
-                } else {
-                    None
+                // Classify function as yielding or unyielding using the code analyzer.
+                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names)?;
+                let has_yielding_entry = match classification {
+                    crate::analyzer::YieldingClassification::Yielding => {
+                        // If declared inside @[unyielding], reject the contradiction.
+                        if yc.unyielding_depth > 0 {
+                            return Err(RuntimeError::system_error(
+                                format!("function '{}' is annotated @[unyielding] but contains yielding operations", name),
+                                ErrorCode::AsyncError,
+                            ));
+                        }
+                        Some(true)
+                    }
+                    crate::analyzer::YieldingClassification::Unyielding => Some(false),
                 };
-                // Create an interpreted function shim that captures body + env.
+                // Create a self-contained shim based on yielding classification.
                 let captured_body = *body.clone();
                 let captured_env = env.clone();
                 let captured_params = param_names.clone();
-                let shim: Shim = Rc::new(move |args: &[Value]| {
-                    // Create a child scope from the captured closure environment
-                    let call_env = captured_env.child();
-                    for (param, arg) in captured_params.iter().zip(args.iter()) {
-                        call_env.define(param.clone(), arg.clone());
-                    }
-                    // Store pending execution for call_function_inner to pick up
-                    PENDING_INTERP_CALL.with(|cell| {
-                        *cell.borrow_mut() = Some(InterpCall {
-                            body: captured_body.clone(),
-                            env: call_env,
+                let captured_vm = vm.clone();
+                let captured_is_async = *is_async;
+                let captured_name = name.clone();
+                let captured_return_type = return_type.clone();
+
+                let shim: Shim = if has_yielding_entry == Some(true) {
+                    // Yielding shim: spawn a local task and return Future.
+                    Rc::new(move |args: &[Value]| {
+                        let call_env = captured_env.child();
+                        for (param, arg) in captured_params.iter().zip(args.iter()) {
+                            call_env.define(param.clone(), arg.clone());
+                        }
+                        let vm_clone = captured_vm.clone();
+                        let body_clone = captured_body.clone();
+                        let is_async = captured_is_async;
+                        let fn_name = captured_name.clone();
+                        let ret_type = captured_return_type.clone();
+
+                        let handle = tokio::task::spawn_local(async move {
+                            let mut task_ctx = TaskContext::new();
+                            let mut yield_ctx = YieldContext::new();
+                            task_ctx.push_defer_frame();
+                            task_ctx.async_stack.push((is_async, fn_name.clone()));
+                            yield_ctx.check_yield_budget().await;
+                            let result = IshVm::exec_statement_yielding(
+                                &vm_clone, &mut task_ctx, &mut yield_ctx, &body_clone, &call_env,
+                            ).await;
+                            IshVm::pop_and_run_defers(&vm_clone, &mut task_ctx, &mut yield_ctx).await;
+                            task_ctx.async_stack.pop();
+                            let return_val = match result? {
+                                ControlFlow::Return(v) => v,
+                                ControlFlow::ExprValue(v) => v,
+                                ControlFlow::None => Value::Null,
+                                ControlFlow::Throw(v) => return Err(RuntimeError::thrown(v)),
+                            };
+                            IshVm::audit_type_annotation(
+                                &vm_clone, &format!("return of '{fn_name}'"),
+                                &return_val, ret_type.as_ref(),
+                            )?;
+                            Ok(return_val)
                         });
-                    });
-                    Ok(Value::Null) // placeholder — call_function_inner handles the real result
-                });
+                        Ok(Value::Future(FutureRef::new(handle)))
+                    })
+                } else {
+                    // Unyielding shim: execute body synchronously.
+                    Rc::new(move |args: &[Value]| {
+                        let call_env = captured_env.child();
+                        for (param, arg) in captured_params.iter().zip(args.iter()) {
+                            call_env.define(param.clone(), arg.clone());
+                        }
+                        let mut task_ctx = TaskContext::new();
+                        task_ctx.push_defer_frame();
+                        task_ctx.async_stack.push((captured_is_async, captured_name.clone()));
+                        let result = IshVm::exec_statement_unyielding(
+                            &captured_vm, &mut task_ctx, &captured_body, &call_env,
+                        );
+                        IshVm::pop_and_run_defers_unyielding(&captured_vm, &mut task_ctx);
+                        task_ctx.async_stack.pop();
+                        let return_val = match result? {
+                            ControlFlow::Return(v) => v,
+                            ControlFlow::ExprValue(v) => v,
+                            ControlFlow::None => Value::Null,
+                            ControlFlow::Throw(v) => return Err(RuntimeError::thrown(v)),
+                        };
+                        IshVm::audit_type_annotation(
+                            &captured_vm, &format!("return of '{}'", captured_name),
+                            &return_val, captured_return_type.as_ref(),
+                        )?;
+                        Ok(return_val)
+                    })
+                };
+
                 let func_val = Value::Function(Gc::new(IshFunction {
                     name: Some(name.clone()),
                     params: param_names,
@@ -506,7 +560,7 @@ impl IshVm {
             }
 
             Statement::Throw { value } => {
-                let val = Self::eval_expression(vm, task, yc, value, env).await?;
+                let val = Self::eval_expression_yielding(vm, task, yc, value, env).await?;
                 // Throw audit (unconditional): ensure the thrown value
                 // qualifies as an error and add @Error entry.
                 use crate::ledger::entry::Entry;
@@ -556,7 +610,7 @@ impl IshVm {
                 // Collect thrown value from either ControlFlow::Throw or
                 // a RuntimeError with thrown_value (throw that crossed a
                 // function boundary via call_function).
-                let (result, thrown) = match Self::exec_statement(vm, task, yc, body, env).await {
+                let (result, thrown) = match Self::exec_statement_yielding(vm, task, yc, body, env).await {
                     Ok(ControlFlow::Throw(v)) => (ControlFlow::None, Some(v)),
                     Ok(other) => (other, None),
                     Err(e) if e.thrown_value.is_some() => {
@@ -573,7 +627,7 @@ impl IshVm {
                         // matching will come with the type system).
                         let catch_env = env.child();
                         catch_env.define(clause.param.clone(), thrown.clone());
-                        catch_result = Self::exec_statement(vm, task, yc, &clause.body, &catch_env).await?;
+                        catch_result = Self::exec_statement_yielding(vm, task, yc, &clause.body, &catch_env).await?;
                         caught = true;
                         break;
                     }
@@ -588,7 +642,7 @@ impl IshVm {
                 };
                 // Execute finally block if present (always runs)
                 if let Some(fin) = finally {
-                    let fin_result = Self::exec_statement(vm, task, yc, fin, env).await?;
+                    let fin_result = Self::exec_statement_yielding(vm, task, yc, fin, env).await?;
                     // Per decision: no return from finally.
                     // finally block does NOT override the result.
                     // But if finally throws, that replaces the original.
@@ -604,7 +658,7 @@ impl IshVm {
                 let mut initialized: Vec<(String, Value)> = Vec::new();
                 // Initialize resources in order
                 for (name, expr) in resources {
-                    match Self::eval_expression(vm, task, yc, expr, &with_env).await {
+                    match Self::eval_expression_yielding(vm, task, yc, expr, &with_env).await {
                         Ok(val) => {
                             with_env.define(name.clone(), val.clone());
                             initialized.push((name.clone(), val));
@@ -612,18 +666,18 @@ impl IshVm {
                         Err(e) => {
                             // Close already-initialized resources in reverse order
                             for (_, res) in initialized.into_iter().rev() {
-                                let _ = Self::try_close(vm, task, yc, &res).await;
+                                let _ = Self::try_close(vm, &res);
                             }
                             return Err(e);
                         }
                     }
                 }
                 // Execute body
-                let result = Self::exec_statement(vm, task, yc, body, &with_env).await?;
+                let result = Self::exec_statement_yielding(vm, task, yc, body, &with_env).await?;
                 // Close resources in reverse order
                 let mut close_error: Option<Value> = None;
                 for (_, res) in initialized.into_iter().rev() {
-                    if let Err(_e) = Self::try_close(vm, task, yc, &res).await {
+                    if let Err(_e) = Self::try_close(vm, &res) {
                         // If close fails, save the error
                         if close_error.is_none() {
                             close_error = Some(Value::String(Rc::new(_e.message)));
@@ -727,7 +781,7 @@ impl IshVm {
                         }
                     }
                 }
-                let result = Self::exec_statement(vm, task, yc, inner, env).await;
+                let result = Self::exec_statement_yielding(vm, task, yc, inner, env).await;
                 if unyielding {
                     yc.unyielding_depth -= 1;
                 }
@@ -813,19 +867,19 @@ impl IshVm {
     }
 
     /// Try to call close() on a value, used by WithBlock.
-    async fn try_close(vm: &Rc<RefCell<IshVm>>, task: &mut TaskContext, yc: &mut YieldContext, value: &Value) -> Result<(), RuntimeError> {
+    fn try_close(vm: &Rc<RefCell<IshVm>>, value: &Value) -> Result<(), RuntimeError> {
         if let Value::Object(ref obj_ref) = value {
             let map = obj_ref.borrow();
             if let Some(close_fn) = map.get("close").cloned() {
                 drop(map);
-                Self::call_function_inner(vm, task, yc, &close_fn, &[]).await?;
+                Self::call_function_inner(vm, &close_fn, &[])?;
             }
         }
         Ok(())
     }
 
     /// Evaluate an expression in the given environment.
-    fn eval_expression<'a>(
+    fn eval_expression_yielding<'a>(
         vm: &'a Rc<RefCell<IshVm>>,
         task: &'a mut TaskContext,
         yc: &'a mut YieldContext,
@@ -846,29 +900,29 @@ impl IshVm {
             Expression::Identifier(name) => env.get(name),
 
             Expression::BinaryOp { op, left, right } => {
-                let lhs = Self::eval_expression(vm, task, yc, left, env).await?;
+                let lhs = Self::eval_expression_yielding(vm, task, yc, left, env).await?;
                 // Short-circuit for logical operators
                 match op {
                     BinaryOperator::And => {
                         if !lhs.is_truthy() {
                             return Ok(lhs);
                         }
-                        return Self::eval_expression(vm, task, yc, right, env).await;
+                        return Self::eval_expression_yielding(vm, task, yc, right, env).await;
                     }
                     BinaryOperator::Or => {
                         if lhs.is_truthy() {
                             return Ok(lhs);
                         }
-                        return Self::eval_expression(vm, task, yc, right, env).await;
+                        return Self::eval_expression_yielding(vm, task, yc, right, env).await;
                     }
                     _ => {}
                 }
-                let rhs = Self::eval_expression(vm, task, yc, right, env).await?;
+                let rhs = Self::eval_expression_yielding(vm, task, yc, right, env).await?;
                 Self::eval_binary_op(op, &lhs, &rhs)
             }
 
             Expression::UnaryOp { op, operand } => {
-                let val = Self::eval_expression(vm, task, yc, operand, env).await?;
+                let val = Self::eval_expression_yielding(vm, task, yc, operand, env).await?;
                 match op {
                     UnaryOperator::Not => Ok(Value::Bool(!val.is_truthy())),
                     UnaryOperator::Negate => match val {
@@ -891,18 +945,50 @@ impl IshVm {
             }
 
             Expression::FunctionCall { callee, args } => {
-                let func_val = Self::eval_expression(vm, task, yc, callee, env).await?;
+                let func_val = Self::eval_expression_yielding(vm, task, yc, callee, env).await?;
                 let mut arg_vals = Vec::with_capacity(args.len());
                 for arg in args {
-                    arg_vals.push(Self::eval_expression(vm, task, yc, arg, env).await?);
+                    arg_vals.push(Self::eval_expression_yielding(vm, task, yc, arg, env).await?);
                 }
-                Self::call_function_inner(vm, task, yc, &func_val, &arg_vals).await
+                let result = Self::call_function_inner(vm, &func_val, &arg_vals)?;
+                // Implied await: if the result is a Future (from a yielding
+                // shim), await it transparently.
+                if let Value::Future(ref future_ref) = result {
+                    match future_ref.take() {
+                        Some(handle) => {
+                            match handle.await {
+                                Ok(inner) => inner,
+                                Err(join_err) => {
+                                    if join_err.is_cancelled() {
+                                        Err(RuntimeError::system_error(
+                                            "called task was cancelled",
+                                            ErrorCode::AsyncError,
+                                        ))
+                                    } else {
+                                        Err(RuntimeError::system_error(
+                                            format!("called task panicked: {}", join_err),
+                                            ErrorCode::AsyncError,
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            Err(RuntimeError::system_error(
+                                "future has already been awaited",
+                                ErrorCode::AsyncError,
+                            ))
+                        }
+                    }
+                } else {
+                    Ok(result)
+                }
             }
 
             Expression::ObjectLiteral(pairs) => {
                 let mut map = HashMap::new();
                 for (key, val_expr) in pairs {
-                    let val = Self::eval_expression(vm, task, yc, val_expr, env).await?;
+                    let val = Self::eval_expression_yielding(vm, task, yc, val_expr, env).await?;
                     map.insert(key.clone(), val);
                 }
                 Ok(new_object(map))
@@ -911,13 +997,13 @@ impl IshVm {
             Expression::ListLiteral(elements) => {
                 let mut items = Vec::with_capacity(elements.len());
                 for elem in elements {
-                    items.push(Self::eval_expression(vm, task, yc, elem, env).await?);
+                    items.push(Self::eval_expression_yielding(vm, task, yc, elem, env).await?);
                 }
                 Ok(new_list(items))
             }
 
             Expression::PropertyAccess { object, property } => {
-                let obj = Self::eval_expression(vm, task, yc, object, env).await?;
+                let obj = Self::eval_expression_yielding(vm, task, yc, object, env).await?;
                 match obj {
                     Value::Object(ref obj_ref) => {
                         let map = obj_ref.borrow();
@@ -932,8 +1018,8 @@ impl IshVm {
             }
 
             Expression::IndexAccess { object, index } => {
-                let obj = Self::eval_expression(vm, task, yc, object, env).await?;
-                let idx = Self::eval_expression(vm, task, yc, index, env).await?;
+                let obj = Self::eval_expression_yielding(vm, task, yc, object, env).await?;
+                let idx = Self::eval_expression_yielding(vm, task, yc, index, env).await?;
                 match (&obj, &idx) {
                     (Value::List(list_ref), Value::Int(i)) => {
                         let list = list_ref.borrow();
@@ -963,23 +1049,74 @@ impl IshVm {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
                     params.iter().map(|p| p.type_annotation.clone()).collect();
-                // Create an interpreted function shim for the lambda
+                // Classify lambda as yielding or unyielding using the code analyzer.
+                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names)?;
+                let has_yielding_entry = match classification {
+                    crate::analyzer::YieldingClassification::Yielding => Some(true),
+                    crate::analyzer::YieldingClassification::Unyielding => Some(false),
+                };
+                // Create a self-contained shim based on yielding classification.
                 let captured_body = *body.clone();
                 let captured_env = env.clone();
                 let captured_params = param_names.clone();
-                let shim: Shim = Rc::new(move |args: &[Value]| {
-                    let call_env = captured_env.child();
-                    for (param, arg) in captured_params.iter().zip(args.iter()) {
-                        call_env.define(param.clone(), arg.clone());
-                    }
-                    PENDING_INTERP_CALL.with(|cell| {
-                        *cell.borrow_mut() = Some(InterpCall {
-                            body: captured_body.clone(),
-                            env: call_env,
+                let captured_vm = vm.clone();
+                let captured_is_async = *is_async;
+
+                let shim: Shim = if has_yielding_entry == Some(true) {
+                    // Yielding shim: spawn a local task and return Future.
+                    Rc::new(move |args: &[Value]| {
+                        let call_env = captured_env.child();
+                        for (param, arg) in captured_params.iter().zip(args.iter()) {
+                            call_env.define(param.clone(), arg.clone());
+                        }
+                        let vm_clone = captured_vm.clone();
+                        let body_clone = captured_body.clone();
+                        let is_async = captured_is_async;
+
+                        let handle = tokio::task::spawn_local(async move {
+                            let mut task_ctx = TaskContext::new();
+                            let mut yield_ctx = YieldContext::new();
+                            task_ctx.push_defer_frame();
+                            task_ctx.async_stack.push((is_async, "anonymous".to_string()));
+                            yield_ctx.check_yield_budget().await;
+                            let result = IshVm::exec_statement_yielding(
+                                &vm_clone, &mut task_ctx, &mut yield_ctx, &body_clone, &call_env,
+                            ).await;
+                            IshVm::pop_and_run_defers(&vm_clone, &mut task_ctx, &mut yield_ctx).await;
+                            task_ctx.async_stack.pop();
+                            match result? {
+                                ControlFlow::Return(v) => Ok(v),
+                                ControlFlow::ExprValue(v) => Ok(v),
+                                ControlFlow::None => Ok(Value::Null),
+                                ControlFlow::Throw(v) => Err(RuntimeError::thrown(v)),
+                            }
                         });
-                    });
-                    Ok(Value::Null)
-                });
+                        Ok(Value::Future(FutureRef::new(handle)))
+                    })
+                } else {
+                    // Unyielding shim: execute body synchronously.
+                    Rc::new(move |args: &[Value]| {
+                        let call_env = captured_env.child();
+                        for (param, arg) in captured_params.iter().zip(args.iter()) {
+                            call_env.define(param.clone(), arg.clone());
+                        }
+                        let mut task_ctx = TaskContext::new();
+                        task_ctx.push_defer_frame();
+                        task_ctx.async_stack.push((captured_is_async, "anonymous".to_string()));
+                        let result = IshVm::exec_statement_unyielding(
+                            &captured_vm, &mut task_ctx, &captured_body, &call_env,
+                        );
+                        IshVm::pop_and_run_defers_unyielding(&captured_vm, &mut task_ctx);
+                        task_ctx.async_stack.pop();
+                        match result? {
+                            ControlFlow::Return(v) => Ok(v),
+                            ControlFlow::ExprValue(v) => Ok(v),
+                            ControlFlow::None => Ok(Value::Null),
+                            ControlFlow::Throw(v) => Err(RuntimeError::thrown(v)),
+                        }
+                    })
+                };
+
                 Ok(Value::Function(Gc::new(IshFunction {
                     name: None,
                     params: param_names,
@@ -987,7 +1124,7 @@ impl IshVm {
                     return_type: None,
                     shim,
                     is_async: *is_async,
-                    has_yielding_entry: None,
+                    has_yielding_entry,
                 })))
             }
 
@@ -997,7 +1134,7 @@ impl IshVm {
                     match part {
                         ish_ast::StringPart::Text(text) => result.push_str(text),
                         ish_ast::StringPart::Expr(expr) => {
-                            let val = Self::eval_expression(vm, task, yc, expr, env).await?;
+                            let val = Self::eval_expression_yielding(vm, task, yc, expr, env).await?;
                             result.push_str(&val.to_display_string());
                         }
                     }
@@ -1015,7 +1152,7 @@ impl IshVm {
                     }
                     _ => {
                         // Execute as normal statement, capture result
-                        match Self::exec_statement(vm, task, yc, inner, env).await? {
+                        match Self::exec_statement_yielding(vm, task, yc, inner, env).await? {
                             ControlFlow::ExprValue(v) => Ok(v),
                             ControlFlow::Return(v) => Ok(v),
                             _ => Ok(Value::Null),
@@ -1058,11 +1195,11 @@ impl IshVm {
                     }
                 }
                 // Resolve callee
-                let callee_val = Self::eval_expression(vm, task, yc, callee, env).await?;
+                let callee_val = Self::eval_expression_yielding(vm, task, yc, callee, env).await?;
 
                 // Check yielding classification before calling (E012)
                 if let Value::Function(ref f) = callee_val {
-                    if f.has_yielding_entry == Some(false) {
+                    if f.has_yielding_entry != Some(true) {
                         return Err(RuntimeError::system_error(
                             format!("cannot await unyielding function '{}'",
                                 f.name.as_deref().unwrap_or("<anonymous>")),
@@ -1074,11 +1211,11 @@ impl IshVm {
                 // Evaluate arguments
                 let mut arg_vals = Vec::with_capacity(args.len());
                 for arg in args.iter() {
-                    arg_vals.push(Self::eval_expression(vm, task, yc, arg, env).await?);
+                    arg_vals.push(Self::eval_expression_yielding(vm, task, yc, arg, env).await?);
                 }
 
-                // Call the function
-                let val = Self::call_function_inner(vm, task, yc, &callee_val, &arg_vals).await?;
+                // Call the function (synchronous — shim returns Future)
+                let val = Self::call_function_inner(vm, &callee_val, &arg_vals)?;
 
                 // If the result is a Future, await it
                 if let Value::Future(ref future_ref) = val {
@@ -1109,18 +1246,20 @@ impl IshVm {
                         }
                     }
                 } else {
-                    // Non-future result from ambiguous function — pass through
+                    // Non-future result — the function was classified yielding but
+                    // returned a non-future. This shouldn't happen with self-contained
+                    // shims, but pass through for robustness.
                     Ok(val)
                 }
             }
 
             Expression::Spawn { callee, args } => {
                 // Resolve callee
-                let callee_val = Self::eval_expression(vm, task, yc, callee, env).await?;
+                let callee_val = Self::eval_expression_yielding(vm, task, yc, callee, env).await?;
 
                 // Check yielding classification before spawning (E013)
                 if let Value::Function(ref f) = callee_val {
-                    if f.has_yielding_entry == Some(false) {
+                    if f.has_yielding_entry != Some(true) {
                         return Err(RuntimeError::system_error(
                             format!("cannot spawn unyielding function '{}'",
                                 f.name.as_deref().unwrap_or("<anonymous>")),
@@ -1132,23 +1271,14 @@ impl IshVm {
                 // Evaluate arguments in the current context
                 let mut arg_vals = Vec::with_capacity(args.len());
                 for arg in args.iter() {
-                    arg_vals.push(Self::eval_expression(vm, task, yc, arg, env).await?);
+                    arg_vals.push(Self::eval_expression_yielding(vm, task, yc, arg, env).await?);
                 }
 
-                // Spawn a new task that calls the function
-                let spawned_vm = Rc::new(RefCell::new(vm.borrow().spawn_clone()));
-                let callee_clone = callee_val.clone();
-                let handle = tokio::task::spawn_local(async move {
-                    let mut task_ctx = TaskContext::new();
-                    let mut yield_ctx = YieldContext::new();
-                    task_ctx.push_defer_frame();
-                    let result = IshVm::call_function_inner(
-                        &spawned_vm, &mut task_ctx, &mut yield_ctx, &callee_clone, &arg_vals,
-                    ).await;
-                    IshVm::pop_and_run_defers(&spawned_vm, &mut task_ctx, &mut yield_ctx).await;
-                    result
-                });
-                Ok(Value::Future(FutureRef::new(handle)))
+                // Call the function — the yielding shim spawns a task and
+                // returns Value::Future directly.
+                let result = Self::call_function_inner(vm, &callee_val, &arg_vals)?;
+                // The result should be Value::Future from the yielding shim.
+                Ok(result)
             }
         }
         }) // end Box::pin(async move { })
@@ -1252,7 +1382,7 @@ impl IshVm {
                             resolved.push(output.trim_end_matches('\n').to_string());
                         }
                         _ => {
-                            match Self::exec_statement(vm, task, yc, inner, env).await? {
+                            match Self::exec_statement_yielding(vm, task, yc, inner, env).await? {
                                 ControlFlow::ExprValue(v) => resolved.push(format!("{}", v)),
                                 ControlFlow::Return(v) => resolved.push(format!("{}", v)),
                                 _ => resolved.push(String::new()),
@@ -1374,25 +1504,25 @@ impl IshVm {
     }
 
     /// Call a function value with the given arguments (public entry point).
-    pub async fn call_function(
+    pub fn call_function(
         vm: &Rc<RefCell<IshVm>>,
         func: &Value,
         args: &[Value],
     ) -> Result<Value, RuntimeError> {
-        let mut task = TaskContext::new();
-        let mut yc = YieldContext::new();
-        Self::call_function_inner(vm, &mut task, &mut yc, func, args).await
+        Self::call_function_inner(vm, func, args)
     }
 
-    /// Internal call_function with explicit task/yield context.
-    fn call_function_inner<'a>(
-        vm: &'a Rc<RefCell<IshVm>>,
-        task: &'a mut TaskContext,
-        yc: &'a mut YieldContext,
-        func: &'a Value,
-        args: &'a [Value],
-    ) -> Pin<Box<dyn Future<Output = Result<Value, RuntimeError>> + 'a>> {
-        Box::pin(async move {
+    /// Internal synchronous function call.
+    ///
+    /// Shims are self-contained: yielding shims spawn a task and return
+    /// `Value::Future`; unyielding shims execute the body and return the
+    /// result directly.  This method handles arity checks, parameter type
+    /// audits, ledger builtin intercepts, and the shim call.
+    fn call_function_inner(
+        vm: &Rc<RefCell<IshVm>>,
+        func: &Value,
+        args: &[Value],
+    ) -> Result<Value, RuntimeError> {
         match func {
             Value::Function(f) => {
                 // Arity check
@@ -1419,52 +1549,19 @@ impl IshVm {
                     "has_entry_type" => return Self::builtin_has_entry_type(vm, args),
                     "ledger_state" => return Self::builtin_ledger_state(vm, args),
                     "has_entry" => return Self::builtin_has_entry(vm, args),
-                    "apply" if f.has_yielding_entry.is_some() => {
-                        return Self::builtin_apply(vm, task, yc, args).await;
-                    }
                     _ => {}
                 }
 
-                // Call the shim for ALL functions (R1.7)
-                let _shim_result = (f.shim)(args)?;
-
-                // Check for pending interpreted execution
-                let pending = PENDING_INTERP_CALL.with(|cell| cell.borrow_mut().take());
-                if let Some(interp_call) = pending {
-                    // Interpreted function: async body execution
-                    task.push_defer_frame();
-                    task.async_stack.push((f.is_async, f.name.clone().unwrap_or_else(|| "anonymous".to_string())));
-                    yc.check_yield_budget().await;
-                    let result = Self::exec_statement(vm, task, yc, &interp_call.body, &interp_call.env).await;
-                    Self::pop_and_run_defers(vm, task, yc).await;
-                    task.async_stack.pop();
-                    let return_val = match result? {
-                        ControlFlow::Return(v) => v,
-                        ControlFlow::ExprValue(v) => v,
-                        ControlFlow::None => Value::Null,
-                        ControlFlow::Throw(v) => {
-                            return Err(RuntimeError::thrown(v));
-                        }
-                    };
-                    // Audit return type.
-                    let fn_name = f.name.as_deref().unwrap_or("anonymous");
-                    Self::audit_type_annotation(vm,
-                        &format!("return of '{fn_name}'"),
-                        &return_val,
-                        f.return_type.as_ref(),
-                    )?;
-                    Ok(return_val)
-                } else {
-                    // Compiled function: shim result is the final answer
-                    Ok(_shim_result)
-                }
+                // Call the shim — result is the final answer.
+                // Yielding shims return Value::Future; unyielding shims
+                // return the computed value.
+                (f.shim)(args)
             }
             _ => Err(RuntimeError::system_error(format!(
                 "cannot call {}",
                 func.type_name()
             ), ErrorCode::NotCallable)),
         }
-        }) // end Box::pin(async move { })
     }
 
     // ── Type audit helper ─────────────────────────────────────────────────
@@ -1509,38 +1606,6 @@ impl IshVm {
         }
 
         Ok(())
-    }
-
-    // ── Cross-boundary builtin (needs async VM access) ──────────────────────
-
-    /// apply(fn, args_list) -> calls fn with elements of args_list as arguments.
-    /// This creates the interpreted→compiled→interpreted boundary crossing path.
-    async fn builtin_apply<'a>(
-        vm: &'a Rc<RefCell<IshVm>>,
-        task: &'a mut TaskContext,
-        yc: &'a mut YieldContext,
-        args: &'a [Value],
-    ) -> Result<Value, RuntimeError> {
-        if args.len() != 2 {
-            return Err(RuntimeError::system_error(
-                "apply expects 2 arguments: a function and a list of arguments",
-                ErrorCode::ArgumentCountMismatch,
-            ));
-        }
-        let func = &args[0];
-        let arg_list = match &args[1] {
-            Value::List(list) => {
-                let items: Vec<Value> = list.borrow().iter().cloned().collect();
-                items
-            }
-            _ => {
-                return Err(RuntimeError::system_error(
-                    "apply expects a list as the second argument",
-                    ErrorCode::TypeMismatch,
-                ));
-            }
-        };
-        Self::call_function_inner(vm, task, yc, func, &arg_list).await
     }
 
     // ── Ledger query builtins (need &self for ledger access) ────────────────
@@ -1653,6 +1718,804 @@ impl IshVm {
         }
     }
 
+    // ── Unyielding execution variants ──────────────────────────────────────
+    //
+    // Synchronous counterparts of exec_statement_yielding / eval_expression_yielding for
+    // functions classified as unyielding.  No YieldContext, no async, no
+    // Box::pin.  Yield, Await, Spawn, and CommandSubstitution are errors.
+
+    /// Pop the current defer frame and execute all deferred statements
+    /// synchronously.
+    fn pop_and_run_defers_unyielding(vm: &Rc<RefCell<IshVm>>, task: &mut TaskContext) {
+        if let Some(deferred) = task.defer_stack.pop() {
+            for (d, env) in deferred.into_iter().rev() {
+                let _ = Self::exec_statement_unyielding(vm, task, &d, &env);
+            }
+        }
+    }
+
+    /// Execute a statement synchronously (unyielding path).
+    fn exec_statement_unyielding(
+        vm: &Rc<RefCell<IshVm>>,
+        task: &mut TaskContext,
+        stmt: &Statement,
+        env: &Environment,
+    ) -> Result<ControlFlow, RuntimeError> {
+        match stmt {
+            Statement::VariableDecl { name, value, type_annotation, .. } => {
+                let val = Self::eval_expression_unyielding(vm, task, value, env)?;
+                Self::audit_type_annotation(vm, name, &val, type_annotation.as_ref())?;
+                env.define(name.clone(), val);
+                Ok(ControlFlow::None)
+            }
+
+            Statement::Assignment { target, value } => {
+                let val = Self::eval_expression_unyielding(vm, task, value, env)?;
+                match target {
+                    AssignTarget::Variable(name) => {
+                        env.set(name, val)?;
+                    }
+                    AssignTarget::Property { object, property } => {
+                        let obj = Self::eval_expression_unyielding(vm, task, object, env)?;
+                        if let Value::Object(ref obj_ref) = obj {
+                            obj_ref.borrow_mut().insert(property.clone(), val);
+                        } else {
+                            return Err(RuntimeError::system_error(format!(
+                                "cannot set property '{}' on {}",
+                                property,
+                                obj.type_name()
+                            ), ErrorCode::TypeMismatch));
+                        }
+                    }
+                    AssignTarget::Index { object, index } => {
+                        let obj = Self::eval_expression_unyielding(vm, task, object, env)?;
+                        let idx = Self::eval_expression_unyielding(vm, task, index, env)?;
+                        if let Value::List(ref list_ref) = obj {
+                            if let Value::Int(i) = idx {
+                                let mut list = list_ref.borrow_mut();
+                                let len = list.len() as i64;
+                                if i < 0 || i >= len {
+                                    return Err(RuntimeError::system_error(format!(
+                                        "index {} out of bounds (length {})",
+                                        i, len
+                                    ), ErrorCode::IndexOutOfBounds));
+                                }
+                                list[i as usize] = val;
+                            } else {
+                                return Err(RuntimeError::system_error("list index must be an integer", ErrorCode::TypeMismatch));
+                            }
+                        } else if let Value::Object(ref obj_ref) = obj {
+                            if let Value::String(ref key) = idx {
+                                obj_ref.borrow_mut().insert(key.as_ref().clone(), val);
+                            } else {
+                                return Err(RuntimeError::system_error(
+                                    "object index must be a string", ErrorCode::TypeMismatch
+                                ));
+                            }
+                        } else {
+                            return Err(RuntimeError::system_error(format!(
+                                "cannot index into {}",
+                                obj.type_name()
+                            ), ErrorCode::TypeMismatch));
+                        }
+                    }
+                }
+                Ok(ControlFlow::None)
+            }
+
+            Statement::Block { statements } => {
+                let block_env = env.child();
+                let mut result = ControlFlow::None;
+                for s in statements {
+                    if let Statement::Defer { body } = s {
+                        task.register_defer(*body.clone(), block_env.clone());
+                        continue;
+                    }
+                    match Self::exec_statement_unyielding(vm, task, s, &block_env)? {
+                        ControlFlow::Return(v) => { result = ControlFlow::Return(v); break; }
+                        ControlFlow::Throw(v) => { result = ControlFlow::Throw(v); break; }
+                        ControlFlow::None | ControlFlow::ExprValue(_) => {}
+                    }
+                }
+                Ok(result)
+            }
+
+            Statement::If { condition, then_block, else_block } => {
+                let cond = Self::eval_expression_unyielding(vm, task, condition, env)?;
+                use crate::ledger::narrowing::{analyze_condition, invert_for_else, NarrowingFact};
+                let facts = analyze_condition(condition);
+                let snapshot = vm.borrow().ledger.save_entries();
+                if cond.is_truthy() {
+                    for fact in &facts {
+                        match fact {
+                            NarrowingFact::IsType { variable, type_name } => {
+                                vm.borrow_mut().ledger.narrow_type(variable, type_name);
+                            }
+                            NarrowingFact::NotNull { variable } => {
+                                vm.borrow_mut().ledger.narrow_exclude_null(variable);
+                            }
+                            NarrowingFact::IsNull { .. } => {}
+                        }
+                    }
+                    let result = Self::exec_statement_unyielding(vm, task, then_block, env);
+                    let then_entries = vm.borrow().ledger.save_entries();
+                    {
+                        let mut vm_mut = vm.borrow_mut();
+                        vm_mut.ledger.restore_entries(snapshot);
+                        let current = vm_mut.ledger.save_entries();
+                        vm_mut.ledger.merge_entries(then_entries, current);
+                    }
+                    result
+                } else if let Some(eb) = else_block {
+                    let else_facts = invert_for_else(&facts);
+                    for fact in &else_facts {
+                        match fact {
+                            NarrowingFact::IsType { variable, type_name } => {
+                                vm.borrow_mut().ledger.narrow_type(variable, type_name);
+                            }
+                            NarrowingFact::NotNull { variable } => {
+                                vm.borrow_mut().ledger.narrow_exclude_null(variable);
+                            }
+                            NarrowingFact::IsNull { .. } => {}
+                        }
+                    }
+                    let result = Self::exec_statement_unyielding(vm, task, eb, env);
+                    let else_entries = vm.borrow().ledger.save_entries();
+                    {
+                        let mut vm_mut = vm.borrow_mut();
+                        vm_mut.ledger.restore_entries(snapshot);
+                        let current = vm_mut.ledger.save_entries();
+                        vm_mut.ledger.merge_entries(current, else_entries);
+                    }
+                    result
+                } else {
+                    Ok(ControlFlow::None)
+                }
+            }
+
+            Statement::While { condition, body, yield_every: _ } => {
+                // No yield budget check or yield_every in unyielding context.
+                loop {
+                    let cond = Self::eval_expression_unyielding(vm, task, condition, env)?;
+                    if !cond.is_truthy() {
+                        break;
+                    }
+                    match Self::exec_statement_unyielding(vm, task, body, env)? {
+                        ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
+                        ControlFlow::Throw(v) => return Ok(ControlFlow::Throw(v)),
+                        ControlFlow::None | ControlFlow::ExprValue(_) => {}
+                    }
+                }
+                Ok(ControlFlow::None)
+            }
+
+            Statement::ForEach { variable, iterable, body, yield_every: _ } => {
+                let iter_val = Self::eval_expression_unyielding(vm, task, iterable, env)?;
+                if let Value::List(ref list_ref) = iter_val {
+                    let items: Vec<Value> = list_ref.borrow().clone();
+                    for item in items {
+                        let loop_env = env.child();
+                        loop_env.define(variable.clone(), item);
+                        match Self::exec_statement_unyielding(vm, task, body, &loop_env)? {
+                            ControlFlow::Return(v) => return Ok(ControlFlow::Return(v)),
+                            ControlFlow::Throw(v) => return Ok(ControlFlow::Throw(v)),
+                            ControlFlow::None | ControlFlow::ExprValue(_) => {}
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::system_error(format!(
+                        "cannot iterate over {}",
+                        iter_val.type_name()
+                    ), ErrorCode::TypeMismatch));
+                }
+                Ok(ControlFlow::None)
+            }
+
+            Statement::Return { value } => {
+                let val = if let Some(expr) = value {
+                    Self::eval_expression_unyielding(vm, task, expr, env)?
+                } else {
+                    Value::Null
+                };
+                Ok(ControlFlow::Return(val))
+            }
+
+            Statement::ExpressionStmt(expr) => {
+                let val = Self::eval_expression_unyielding(vm, task, expr, env)?;
+                Ok(ControlFlow::ExprValue(val))
+            }
+
+            Statement::FunctionDecl {
+                name, params, body, return_type, is_async, ..
+            } => {
+                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
+                    params.iter().map(|p| p.type_annotation.clone()).collect();
+                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names)?;
+                let has_yielding_entry = match classification {
+                    crate::analyzer::YieldingClassification::Yielding => Some(true),
+                    crate::analyzer::YieldingClassification::Unyielding => Some(false),
+                };
+                // No @[unyielding] contradiction check — declaring a yielding
+                // function inside an unyielding execution path is fine.
+                // Create a self-contained shim based on yielding classification.
+                let captured_body = *body.clone();
+                let captured_env = env.clone();
+                let captured_params = param_names.clone();
+                let captured_vm = vm.clone();
+                let captured_is_async = *is_async;
+                let captured_name = name.clone();
+                let captured_return_type = return_type.clone();
+
+                let shim: Shim = if has_yielding_entry == Some(true) {
+                    Rc::new(move |args: &[Value]| {
+                        let call_env = captured_env.child();
+                        for (param, arg) in captured_params.iter().zip(args.iter()) {
+                            call_env.define(param.clone(), arg.clone());
+                        }
+                        let vm_clone = captured_vm.clone();
+                        let body_clone = captured_body.clone();
+                        let is_async = captured_is_async;
+                        let fn_name = captured_name.clone();
+                        let ret_type = captured_return_type.clone();
+
+                        let handle = tokio::task::spawn_local(async move {
+                            let mut task_ctx = TaskContext::new();
+                            let mut yield_ctx = YieldContext::new();
+                            task_ctx.push_defer_frame();
+                            task_ctx.async_stack.push((is_async, fn_name.clone()));
+                            yield_ctx.check_yield_budget().await;
+                            let result = IshVm::exec_statement_yielding(
+                                &vm_clone, &mut task_ctx, &mut yield_ctx, &body_clone, &call_env,
+                            ).await;
+                            IshVm::pop_and_run_defers(&vm_clone, &mut task_ctx, &mut yield_ctx).await;
+                            task_ctx.async_stack.pop();
+                            let return_val = match result? {
+                                ControlFlow::Return(v) => v,
+                                ControlFlow::ExprValue(v) => v,
+                                ControlFlow::None => Value::Null,
+                                ControlFlow::Throw(v) => return Err(RuntimeError::thrown(v)),
+                            };
+                            IshVm::audit_type_annotation(
+                                &vm_clone, &format!("return of '{fn_name}'"),
+                                &return_val, ret_type.as_ref(),
+                            )?;
+                            Ok(return_val)
+                        });
+                        Ok(Value::Future(FutureRef::new(handle)))
+                    })
+                } else {
+                    Rc::new(move |args: &[Value]| {
+                        let call_env = captured_env.child();
+                        for (param, arg) in captured_params.iter().zip(args.iter()) {
+                            call_env.define(param.clone(), arg.clone());
+                        }
+                        let mut task_ctx = TaskContext::new();
+                        task_ctx.push_defer_frame();
+                        task_ctx.async_stack.push((captured_is_async, captured_name.clone()));
+                        let result = IshVm::exec_statement_unyielding(
+                            &captured_vm, &mut task_ctx, &captured_body, &call_env,
+                        );
+                        IshVm::pop_and_run_defers_unyielding(&captured_vm, &mut task_ctx);
+                        task_ctx.async_stack.pop();
+                        let return_val = match result? {
+                            ControlFlow::Return(v) => v,
+                            ControlFlow::ExprValue(v) => v,
+                            ControlFlow::None => Value::Null,
+                            ControlFlow::Throw(v) => return Err(RuntimeError::thrown(v)),
+                        };
+                        IshVm::audit_type_annotation(
+                            &captured_vm, &format!("return of '{}'", captured_name),
+                            &return_val, captured_return_type.as_ref(),
+                        )?;
+                        Ok(return_val)
+                    })
+                };
+                let func_val = Value::Function(Gc::new(IshFunction {
+                    name: Some(name.clone()),
+                    params: param_names,
+                    param_types,
+                    return_type: return_type.clone(),
+                    shim,
+                    is_async: *is_async,
+                    has_yielding_entry,
+                }));
+                env.define(name.clone(), func_val);
+                Ok(ControlFlow::None)
+            }
+
+            Statement::Throw { value } => {
+                let val = Self::eval_expression_unyielding(vm, task, value, env)?;
+                use crate::ledger::entry::Entry;
+                let thrown = match &val {
+                    Value::Object(ref obj_ref) => {
+                        let map = obj_ref.borrow();
+                        let has_message = matches!(map.get("message"), Some(Value::String(_)));
+                        if has_message {
+                            drop(map);
+                            vm.borrow_mut().ledger.add_entry("@thrown",
+                                Entry::new("Error").with_param("message", "String"));
+                            val
+                        } else {
+                            drop(map);
+                            let mut wrapper = HashMap::new();
+                            wrapper.insert("message".to_string(), Value::String(Rc::new(
+                                "throw audit: thrown object lacks 'message: String' property".to_string()
+                            )));
+                            wrapper.insert("code".to_string(), Value::String(Rc::new(ErrorCode::UnhandledThrow.as_str().to_string())));
+                            wrapper.insert("original".to_string(), val);
+                            let wrapped = new_object(wrapper);
+                            vm.borrow_mut().ledger.add_entry("@thrown",
+                                Entry::new("Error").with_param("message", "String"));
+                            wrapped
+                        }
+                    }
+                    _ => {
+                        let mut wrapper = HashMap::new();
+                        wrapper.insert("message".to_string(), Value::String(Rc::new(
+                            format!("throw audit: non-object thrown: {}", val)
+                        )));
+                        wrapper.insert("code".to_string(), Value::String(Rc::new(ErrorCode::UnhandledThrow.as_str().to_string())));
+                        wrapper.insert("original".to_string(), val);
+                        let wrapped = new_object(wrapper);
+                        vm.borrow_mut().ledger.add_entry("@thrown",
+                            Entry::new("Error").with_param("message", "String"));
+                        wrapped
+                    }
+                };
+                Ok(ControlFlow::Throw(thrown))
+            }
+
+            Statement::TryCatch { body, catches, finally } => {
+                let (result, thrown) = match Self::exec_statement_unyielding(vm, task, body, env) {
+                    Ok(ControlFlow::Throw(v)) => (ControlFlow::None, Some(v)),
+                    Ok(other) => (other, None),
+                    Err(e) if e.thrown_value.is_some() => {
+                        (ControlFlow::None, e.thrown_value)
+                    }
+                    Err(e) => return Err(e),
+                };
+                let result = if let Some(thrown) = thrown {
+                    let mut caught = false;
+                    let mut catch_result = ControlFlow::None;
+                    for clause in catches {
+                        let catch_env = env.child();
+                        catch_env.define(clause.param.clone(), thrown.clone());
+                        catch_result = Self::exec_statement_unyielding(vm, task, &clause.body, &catch_env)?;
+                        caught = true;
+                        break;
+                    }
+                    if caught {
+                        catch_result
+                    } else {
+                        ControlFlow::Throw(thrown)
+                    }
+                } else {
+                    result
+                };
+                if let Some(fin) = finally {
+                    let fin_result = Self::exec_statement_unyielding(vm, task, fin, env)?;
+                    if let ControlFlow::Throw(_) = fin_result {
+                        return Ok(fin_result);
+                    }
+                }
+                Ok(result)
+            }
+
+            Statement::WithBlock { resources, body } => {
+                let with_env = env.child();
+                let mut initialized: Vec<(String, Value)> = Vec::new();
+                for (name, expr) in resources {
+                    match Self::eval_expression_unyielding(vm, task, expr, &with_env) {
+                        Ok(val) => {
+                            with_env.define(name.clone(), val.clone());
+                            initialized.push((name.clone(), val));
+                        }
+                        Err(e) => {
+                            for (_, res) in initialized.into_iter().rev() {
+                                let _ = Self::try_close_unyielding(vm, task, &res);
+                            }
+                            return Err(e);
+                        }
+                    }
+                }
+                let result = Self::exec_statement_unyielding(vm, task, body, &with_env)?;
+                let mut close_error: Option<Value> = None;
+                for (_, res) in initialized.into_iter().rev() {
+                    if let Err(_e) = Self::try_close_unyielding(vm, task, &res) {
+                        if close_error.is_none() {
+                            close_error = Some(Value::String(Rc::new(_e.message)));
+                        }
+                    }
+                }
+                match result {
+                    ControlFlow::Throw(_) => Ok(result),
+                    other => {
+                        if let Some(err) = close_error {
+                            Ok(ControlFlow::Throw(err))
+                        } else {
+                            Ok(other)
+                        }
+                    }
+                }
+            }
+
+            Statement::Defer { body } => {
+                task.register_defer(*body.clone(), env.clone());
+                Ok(ControlFlow::None)
+            }
+
+            Statement::TypeAlias { .. } => Ok(ControlFlow::None),
+            Statement::Use { .. } => Ok(ControlFlow::None),
+            Statement::ModDecl { .. } => Ok(ControlFlow::None),
+
+            Statement::ShellCommand { .. } => {
+                Err(RuntimeError::system_error(
+                    "shell commands cannot execute in unyielding context",
+                    ErrorCode::AsyncError,
+                ))
+            }
+
+            Statement::Annotated { annotations, inner } => {
+                let mut pushed_standards = Vec::new();
+                for ann in annotations {
+                    match ann {
+                        Annotation::Standard(name) => {
+                            vm.borrow_mut().ledger.push_standard(name.clone());
+                            pushed_standards.push(name.clone());
+                        }
+                        Annotation::Entry(_items) => {
+                            // @[unyielding] and @[yield_budget] are no-ops
+                            // (already in unyielding context).
+                        }
+                    }
+                }
+                let result = Self::exec_statement_unyielding(vm, task, inner, env);
+                if !pushed_standards.is_empty() {
+                    let unawaited = crate::value::take_unawaited_future_count();
+                    if unawaited > 0 {
+                        let features = vm.borrow().ledger.active_features();
+                        if let crate::ledger::audit::AuditResult::Discrepancy(report) =
+                            crate::ledger::audit::audit_future_drop(
+                                &features,
+                                &format!("{} future(s) dropped without await", unawaited),
+                            )
+                        {
+                            for _ in pushed_standards.iter().rev() {
+                                vm.borrow_mut().ledger.pop_standard();
+                            }
+                            return Err(RuntimeError::system_error(report.message, ErrorCode::AsyncError));
+                        }
+                    }
+                }
+                for _ in pushed_standards.iter().rev() {
+                    vm.borrow_mut().ledger.pop_standard();
+                }
+                result
+            }
+
+            Statement::StandardDef { name, extends, features } => {
+                use crate::ledger::standard::Standard;
+                let mut std = Standard::new(name.clone());
+                if let Some(parent) = extends {
+                    std = std.with_parent(parent.clone());
+                }
+                for feat in features {
+                    let state = parse_feature_params(&feat.params);
+                    std = std.with_feature(feat.name.clone(), state);
+                }
+                vm.borrow_mut().ledger.standard_registry.register(std);
+                Ok(ControlFlow::None)
+            }
+
+            Statement::EntryTypeDef { name, .. } => {
+                use crate::ledger::entry_type::EntryType;
+                vm.borrow_mut().ledger.entry_type_registry.register(EntryType::new(name.clone()));
+                Ok(ControlFlow::None)
+            }
+
+            Statement::Match { .. } => Ok(ControlFlow::None),
+
+            Statement::Incomplete { kind } => {
+                Err(RuntimeError::system_error(format!("incomplete input: {:?}", kind), ErrorCode::TypeMismatch))
+            }
+
+            Statement::Yield => {
+                Err(RuntimeError::system_error(
+                    "yield cannot be used in unyielding context",
+                    ErrorCode::AsyncError,
+                ))
+            }
+        }
+    }
+
+    /// Try to call close() on a value synchronously (unyielding path).
+    fn try_close_unyielding(vm: &Rc<RefCell<IshVm>>, task: &mut TaskContext, value: &Value) -> Result<(), RuntimeError> {
+        if let Value::Object(ref obj_ref) = value {
+            let map = obj_ref.borrow();
+            if let Some(close_fn) = map.get("close").cloned() {
+                drop(map);
+                Self::call_function_unyielding(vm, task, &close_fn, &[])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Evaluate an expression synchronously (unyielding path).
+    fn eval_expression_unyielding(
+        vm: &Rc<RefCell<IshVm>>,
+        task: &mut TaskContext,
+        expr: &Expression,
+        env: &Environment,
+    ) -> Result<Value, RuntimeError> {
+        match expr {
+            Expression::Literal(lit) => Ok(match lit {
+                Literal::Bool(b) => Value::Bool(*b),
+                Literal::Int(n) => Value::Int(*n),
+                Literal::Float(f) => Value::Float(*f),
+                Literal::String(s) => Value::String(Rc::new(s.clone())),
+                Literal::Char(c) => Value::Char(*c),
+                Literal::Null => Value::Null,
+            }),
+
+            Expression::Identifier(name) => env.get(name),
+
+            Expression::BinaryOp { op, left, right } => {
+                let lhs = Self::eval_expression_unyielding(vm, task, left, env)?;
+                match op {
+                    BinaryOperator::And => {
+                        if !lhs.is_truthy() {
+                            return Ok(lhs);
+                        }
+                        return Self::eval_expression_unyielding(vm, task, right, env);
+                    }
+                    BinaryOperator::Or => {
+                        if lhs.is_truthy() {
+                            return Ok(lhs);
+                        }
+                        return Self::eval_expression_unyielding(vm, task, right, env);
+                    }
+                    _ => {}
+                }
+                let rhs = Self::eval_expression_unyielding(vm, task, right, env)?;
+                Self::eval_binary_op(op, &lhs, &rhs)
+            }
+
+            Expression::UnaryOp { op, operand } => {
+                let val = Self::eval_expression_unyielding(vm, task, operand, env)?;
+                match op {
+                    UnaryOperator::Not => Ok(Value::Bool(!val.is_truthy())),
+                    UnaryOperator::Negate => match val {
+                        Value::Int(n) => Ok(Value::Int(-n)),
+                        Value::Float(f) => Ok(Value::Float(-f)),
+                        _ => Err(RuntimeError::system_error(format!(
+                            "cannot negate {}",
+                            val.type_name()
+                        ), ErrorCode::TypeMismatch)),
+                    },
+                    UnaryOperator::Try => {
+                        if val == Value::Null {
+                            return Err(RuntimeError::system_error("tried to unwrap null value with ?".to_string(), ErrorCode::NullUnwrap));
+                        }
+                        Ok(val)
+                    }
+                }
+            }
+
+            Expression::FunctionCall { callee, args } => {
+                let func_val = Self::eval_expression_unyielding(vm, task, callee, env)?;
+                let mut arg_vals = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_vals.push(Self::eval_expression_unyielding(vm, task, arg, env)?);
+                }
+                Self::call_function_unyielding(vm, task, &func_val, &arg_vals)
+            }
+
+            Expression::ObjectLiteral(pairs) => {
+                let mut map = HashMap::new();
+                for (key, val_expr) in pairs {
+                    let val = Self::eval_expression_unyielding(vm, task, val_expr, env)?;
+                    map.insert(key.clone(), val);
+                }
+                Ok(new_object(map))
+            }
+
+            Expression::ListLiteral(elements) => {
+                let mut items = Vec::with_capacity(elements.len());
+                for elem in elements {
+                    items.push(Self::eval_expression_unyielding(vm, task, elem, env)?);
+                }
+                Ok(new_list(items))
+            }
+
+            Expression::PropertyAccess { object, property } => {
+                let obj = Self::eval_expression_unyielding(vm, task, object, env)?;
+                match obj {
+                    Value::Object(ref obj_ref) => {
+                        let map = obj_ref.borrow();
+                        Ok(map.get(property).cloned().unwrap_or(Value::Null))
+                    }
+                    _ => Err(RuntimeError::system_error(format!(
+                        "cannot access property '{}' on {}",
+                        property,
+                        obj.type_name()
+                    ), ErrorCode::TypeMismatch)),
+                }
+            }
+
+            Expression::IndexAccess { object, index } => {
+                let obj = Self::eval_expression_unyielding(vm, task, object, env)?;
+                let idx = Self::eval_expression_unyielding(vm, task, index, env)?;
+                match (&obj, &idx) {
+                    (Value::List(list_ref), Value::Int(i)) => {
+                        let list = list_ref.borrow();
+                        let i = *i;
+                        if i < 0 || i >= list.len() as i64 {
+                            return Err(RuntimeError::system_error(format!(
+                                "index {} out of bounds (length {})",
+                                i,
+                                list.len()
+                            ), ErrorCode::IndexOutOfBounds));
+                        }
+                        Ok(list[i as usize].clone())
+                    }
+                    (Value::Object(obj_ref), Value::String(key)) => {
+                        let map = obj_ref.borrow();
+                        Ok(map.get(key.as_ref()).cloned().unwrap_or(Value::Null))
+                    }
+                    _ => Err(RuntimeError::system_error(format!(
+                        "cannot index {} with {}",
+                        obj.type_name(),
+                        idx.type_name()
+                    ), ErrorCode::TypeMismatch)),
+                }
+            }
+
+            Expression::Lambda { params, body, is_async } => {
+                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
+                    params.iter().map(|p| p.type_annotation.clone()).collect();
+                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names)?;
+                let has_yielding_entry = match classification {
+                    crate::analyzer::YieldingClassification::Yielding => Some(true),
+                    crate::analyzer::YieldingClassification::Unyielding => Some(false),
+                };
+                let captured_body = *body.clone();
+                let captured_env = env.clone();
+                let captured_params = param_names.clone();
+                let captured_vm = vm.clone();
+                let captured_is_async = *is_async;
+
+                let shim: Shim = if has_yielding_entry == Some(true) {
+                    Rc::new(move |args: &[Value]| {
+                        let call_env = captured_env.child();
+                        for (param, arg) in captured_params.iter().zip(args.iter()) {
+                            call_env.define(param.clone(), arg.clone());
+                        }
+                        let vm_clone = captured_vm.clone();
+                        let body_clone = captured_body.clone();
+                        let is_async = captured_is_async;
+
+                        let handle = tokio::task::spawn_local(async move {
+                            let mut task_ctx = TaskContext::new();
+                            let mut yield_ctx = YieldContext::new();
+                            task_ctx.push_defer_frame();
+                            task_ctx.async_stack.push((is_async, "anonymous".to_string()));
+                            yield_ctx.check_yield_budget().await;
+                            let result = IshVm::exec_statement_yielding(
+                                &vm_clone, &mut task_ctx, &mut yield_ctx, &body_clone, &call_env,
+                            ).await;
+                            IshVm::pop_and_run_defers(&vm_clone, &mut task_ctx, &mut yield_ctx).await;
+                            task_ctx.async_stack.pop();
+                            match result? {
+                                ControlFlow::Return(v) => Ok(v),
+                                ControlFlow::ExprValue(v) => Ok(v),
+                                ControlFlow::None => Ok(Value::Null),
+                                ControlFlow::Throw(v) => Err(RuntimeError::thrown(v)),
+                            }
+                        });
+                        Ok(Value::Future(FutureRef::new(handle)))
+                    })
+                } else {
+                    Rc::new(move |args: &[Value]| {
+                        let call_env = captured_env.child();
+                        for (param, arg) in captured_params.iter().zip(args.iter()) {
+                            call_env.define(param.clone(), arg.clone());
+                        }
+                        let mut task_ctx = TaskContext::new();
+                        task_ctx.push_defer_frame();
+                        task_ctx.async_stack.push((captured_is_async, "anonymous".to_string()));
+                        let result = IshVm::exec_statement_unyielding(
+                            &captured_vm, &mut task_ctx, &captured_body, &call_env,
+                        );
+                        IshVm::pop_and_run_defers_unyielding(&captured_vm, &mut task_ctx);
+                        task_ctx.async_stack.pop();
+                        match result? {
+                            ControlFlow::Return(v) => Ok(v),
+                            ControlFlow::ExprValue(v) => Ok(v),
+                            ControlFlow::None => Ok(Value::Null),
+                            ControlFlow::Throw(v) => Err(RuntimeError::thrown(v)),
+                        }
+                    })
+                };
+
+                Ok(Value::Function(Gc::new(IshFunction {
+                    name: None,
+                    params: param_names,
+                    param_types,
+                    return_type: None,
+                    shim,
+                    is_async: *is_async,
+                    has_yielding_entry,
+                })))
+            }
+
+            Expression::StringInterpolation(parts) => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        ish_ast::StringPart::Text(text) => result.push_str(text),
+                        ish_ast::StringPart::Expr(expr) => {
+                            let val = Self::eval_expression_unyielding(vm, task, expr, env)?;
+                            result.push_str(&val.to_display_string());
+                        }
+                    }
+                }
+                Ok(Value::String(Rc::new(result)))
+            }
+
+            Expression::CommandSubstitution(_) => {
+                Err(RuntimeError::system_error(
+                    "command substitution cannot be used in unyielding context",
+                    ErrorCode::AsyncError,
+                ))
+            }
+
+            Expression::EnvVar(name) => {
+                if name == "?" {
+                    match env.get("__ish_last_exit_code") {
+                        Ok(v) => Ok(v),
+                        Err(_) => Ok(Value::Int(0)),
+                    }
+                } else {
+                    match std::env::var(name) {
+                        Ok(val) => Ok(Value::String(Rc::new(val))),
+                        Err(_) => Ok(Value::Null),
+                    }
+                }
+            }
+
+            Expression::Incomplete { kind } => {
+                Err(RuntimeError::system_error(format!("incomplete expression: {:?}", kind), ErrorCode::TypeMismatch))
+            }
+
+            Expression::Await { .. } => {
+                Err(RuntimeError::system_error(
+                    "await cannot be used in unyielding context",
+                    ErrorCode::AsyncError,
+                ))
+            }
+
+            Expression::Spawn { .. } => {
+                Err(RuntimeError::system_error(
+                    "spawn cannot be used in unyielding context",
+                    ErrorCode::AsyncError,
+                ))
+            }
+        }
+    }
+
+    /// Call a function synchronously (unyielding path).
+    /// Delegates to call_function_inner — shims are self-contained.
+    fn call_function_unyielding(
+        vm: &Rc<RefCell<IshVm>>,
+        _task: &mut TaskContext,
+        func: &Value,
+        args: &[Value],
+    ) -> Result<Value, RuntimeError> {
+        Self::call_function_inner(vm, func, args)
+    }
+
     /// Evaluate a binary operation.
     fn eval_binary_op(
         op: &BinaryOperator,
@@ -1693,7 +2556,7 @@ impl IshVm {
 
             // Logical (handled above via short-circuit, but just in case)
             BinaryOperator::And | BinaryOperator::Or => {
-                unreachable!("logical ops handled in eval_expression")
+                unreachable!("logical ops handled in eval_expression_yielding/eval_expression_unyielding")
             }
         }
     }
@@ -3481,7 +4344,7 @@ test()
     #[tokio::test]
     async fn test_spawn_and_await_simple() {
         let result = run_source_local(r#"
-            fn add(a, b) { return a + b }
+            async fn add(a, b) { return a + b }
             await add(1, 2)
         "#).await.unwrap();
         assert_eq!(result, Value::Int(3));
@@ -3489,9 +4352,9 @@ test()
 
     #[tokio::test]
     async fn test_await_non_future_identity() {
-        // At low assurance, awaiting a function that returns a non-future passes through
+        // Awaiting an async function that returns a non-future value resolves to that value
         let result = run_source_local(r#"
-            fn identity() { return 42 }
+            async fn identity() { return 42 }
             await identity()
         "#).await.unwrap();
         assert_eq!(result, Value::Int(42));
@@ -3502,7 +4365,7 @@ test()
         // Spawning creates futures that run concurrently.
         // We verify a fresh await on a function still works after spawning.
         let result = run_source_local(r#"
-            fn work() { return 42 }
+            async fn work() { return 42 }
             spawn work()
             await work()
         "#).await.unwrap();
@@ -3513,7 +4376,7 @@ test()
     async fn test_await_cancelled_future_error() {
         // Spawn creates a future. Verify spawn returns a future type.
         let result = run_source_local(r#"
-            fn work() { return 42 }
+            async fn work() { return 42 }
             let f = spawn work()
             type_of(f)
         "#).await.unwrap();
@@ -3523,7 +4386,7 @@ test()
     #[tokio::test]
     async fn test_error_propagation_through_await() {
         let result = run_source_local(r#"
-            fn fail() { throw "boom" }
+            async fn fail() { throw "boom" }
             await fail()
         "#).await;
         assert!(result.is_err());
@@ -3543,7 +4406,7 @@ test()
     async fn test_multiple_spawn_interleave() {
         // Await two function calls sequentially
         let result = run_source_local(r#"
-            fn double(n) { return n * 2 }
+            async fn double(n) { return n * 2 }
             let r1 = await double(5)
             let r2 = await double(10)
             r1 + r2
@@ -3557,14 +4420,14 @@ test()
     async fn test_yield_budget_loop_interleaving() {
         // Two tasks with loops: verify each completes correctly via await.
         let result = run_source_local(r#"
-            fn count_up() {
+            async fn count_up() {
                 let c = {v: 0}
                 while c.v < 100 {
                     c.v = c.v + 1
                 }
                 return c.v
             }
-            fn count_down() {
+            async fn count_down() {
                 let c = {v: 100}
                 while c.v > 0 {
                     c.v = c.v - 1

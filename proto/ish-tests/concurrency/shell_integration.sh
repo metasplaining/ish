@@ -11,7 +11,7 @@ assert_output "basic shell command" "hello" "$output"
 
 # --- Shell command in awaited task ---
 output=$(run_ish '
-fn work() {
+async fn work() {
   let r = $(echo from_spawn)
   return r
 }
@@ -22,7 +22,7 @@ assert_output "shell command in awaited task" "from_spawn" "$output"
 
 # --- println from awaited task visible ---
 output=$(run_ish '
-fn work() {
+async fn work() {
   println("from_task")
   return 1
 }

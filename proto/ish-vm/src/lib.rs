@@ -9,3 +9,4 @@ pub mod interpreter;
 pub mod builtins;
 pub mod reflection;
 pub mod ledger;
+pub mod analyzer;
