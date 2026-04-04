@@ -6,3 +6,6 @@ target/
 # If you have a binary crate, keep Cargo.lock committed.
 # Uncomment the line below only for pure library workspaces:
 # Cargo.lock
+
+# Claude Code personal settings
+.claude/settings.local.json

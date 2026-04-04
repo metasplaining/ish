@@ -1,0 +1,19 @@
+{
+  "plansDirectory": "docs/project/plans",
+  "permissions": {
+    "allow": [
+      "Skill(propose)",
+      "Skill(propose:*)",
+      "Skill(revise)",
+      "Skill(revise:*)",
+      "Skill(accept)",
+      "Skill(accept:*)",
+      "Skill(plan-implementation)",
+      "Skill(plan-implementation:*)",
+      "Skill(implement)",
+      "Skill(implement:*)",
+      "Skill(audit)",
+      "Skill(audit:*)"
+    ]
+  }
+}
