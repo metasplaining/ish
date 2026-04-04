@@ -15,6 +15,7 @@ Consolidated TODO lists derived from accepted design proposals. Each plan is the
 
 | Date | Topic | Status | File |
 |------|-------|--------|------|
+| 2026-04-04 | Analyzer Correctness Fixes | completed | [analyzer-correctness.md](analyzer-correctness.md) |
 | 2026-04-03 | Stubbed Analyzer and Yielding/Unyielding Refactoring | ready | [stubbed-analyzer.md](stubbed-analyzer.md) |
 | 2026-04-02 | Runtime extraction | completed | [runtime-extraction.md](runtime-extraction.md) |
 | 2026-03-31 | Concurrency code and tests | completed | [concurrency-code.md](concurrency-code.md) |

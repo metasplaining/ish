@@ -20,6 +20,8 @@ pub enum ErrorCode {
     AsyncError,            // E011
     AwaitUnyielding,       // E012
     SpawnUnyielding,       // E013
+    AwaitNonFuture,        // E014
+    UnyieldingViolation,   // E015
 }
 
 impl ErrorCode {
@@ -38,6 +40,8 @@ impl ErrorCode {
             ErrorCode::AsyncError => "E011",
             ErrorCode::AwaitUnyielding => "E012",
             ErrorCode::SpawnUnyielding => "E013",
+            ErrorCode::AwaitNonFuture => "E014",
+            ErrorCode::UnyieldingViolation => "E015",
         }
     }
 }
@@ -85,6 +89,14 @@ impl RuntimeError {
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // If the thrown value is a coded error object (has a "code" field),
+        // include the code in the display so that shell output contains it.
+        if let Some(Value::Object(ref obj_ref)) = self.thrown_value {
+            let map = obj_ref.borrow();
+            if let Some(Value::String(ref code)) = map.get("code") {
+                return write!(f, "RuntimeError: {} ({})", self.message, code);
+            }
+        }
         write!(f, "RuntimeError: {}", self.message)
     }
 }

@@ -39,10 +39,10 @@ The language is being designed iteratively. A Rust prototype explores key ideas.
 - [x] Concurrency prototype (async/await/spawn/yield, Tokio LocalSet, two-thread shell, yield budget, ledger integration)
 - [x] Concurrency correctness fixes (FutureRef equality, grammar-level await/spawn, compiled functions)
 - [x] Runtime extraction (shim-only architecture, ish-core, ish-runtime type extraction, ErrorCode enum, apply builtin)
+- [x] Stubbed code analyzer and yielding/unyielding function refactoring (PENDING_INTERP_CALL removal)
+- [x] Analyzer correctness fixes (is_yielding builtin, spawn reclassification, implied await scope, await grammar expansion)
 
 ### In Progress
-
-- [ ] Stubbed code analyzer and yielding/unyielding function refactoring (PENDING_INTERP_CALL removal)
 - [ ] Memory management design (GC vs. manual vs. arena)
 - [ ] Polymorphism strategy (structural vs. nominal interplay)
 

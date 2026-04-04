@@ -60,14 +60,16 @@ All ish user code runs inside a Tokio `LocalSet` on the main thread. Tasks are s
 
 ### Grammar Restrictions on `await` and `spawn`
 
-`await` and `spawn` syntactically require a function call as their operand:
+`await` accepts any expression as its operand. `spawn` still requires a function call.
 
 ```pest
-await_op ~ call_expr    // not await_op ~ unary
+await_op ~ expr         // await accepts any expression
 spawn_op ~ call_expr    // not spawn_op ~ unary
 ```
 
-Expressions like `await 42` or `spawn "hello"` are not valid `Await`/`Spawn` nodes — the parser-matches-everything philosophy encodes them as `Incomplete` AST nodes. The AST `Await` and `Spawn` nodes contain a callee and arguments (mirroring `FunctionCall`), not a generic expression.
+Expressions like `spawn "hello"` are not valid `Spawn` nodes — the parser-matches-everything philosophy encodes them as `Incomplete` AST nodes. The AST `Spawn` node contains a callee and arguments (mirroring `FunctionCall`). The `Await` node has the shape `{ expr: Box<Expression> }` — it wraps any expression, not a callee/args pair.
+
+If the `await`-ed expression does not evaluate to a `Value::Future`, ish throws E014 (`AwaitNonFuture`).
 
 ### Yielding Classification and Validation
 
@@ -90,13 +92,26 @@ Two `Future` values are equal if and only if they reference the same underlying 
 
 ### Implied Await
 
-At low assurance (when the `await_required` feature is not active), calling a function that returns a `Future` without explicit `await` or `spawn` triggers an **implied await**: the interpreter immediately awaits the future and returns the resolved value. This makes parallel builtins like `println` backward-compatible — `println("hello")` works without `await`.
+At low assurance (when the `await_required` feature is not active), calling a **yielding** function that returns a `Future` without explicit `await` or `spawn` triggers an **implied await**: the interpreter immediately awaits the future and returns the resolved value. This makes parallel builtins like `println` backward-compatible — `println("hello")` works without `await`.
 
-When `call_function_inner` returns a `Value::Future` from a bare function call (no `await` or `spawn`), the yielding interpreter path implicitly awaits the future. This is the mechanism that propagates yielding through function calls: if function `A` calls yielding function `B` without `await`, the code analyzer classifies `A` as yielding, and the yielding interpreter path handles the implied await.
+Implied await is guarded by the callee's yielding classification. Only calls to functions with `has_yielding_entry == Some(true)` trigger implied await. Unyielding functions that return a `Value::Future` (e.g. `apply`) do not trigger implied await — the future is returned as-is.
+
+When `call_function_inner` returns a `Value::Future` from a bare call to a yielding function (no `await` or `spawn`), the yielding interpreter path implicitly awaits the future. This is the mechanism that propagates yielding through function calls: if function `A` calls yielding function `B` without `await`, the code analyzer classifies `A` as yielding, and the yielding interpreter path handles the implied await.
 
 At high assurance (when `await_required` is `required`), no implied await occurs. The `Future` is returned as-is, and the unawaited-future audit detects it.
 
-The only way to obtain a `Future` value (rather than the resolved value) is via `spawn`.
+The ways to obtain a `Future` value (rather than the resolved value) are via `spawn`, or by calling an unyielding function that returns a `Value::Future` (e.g., `apply(async_fn, args)` returns a `Future` because `apply` is unyielding).
+
+Example contrast:
+```ish
+// async_fn is yielding — implied await resolves the Future:
+async fn async_fn() { return 42 }
+let result = async_fn()   // result == 42, not a Future
+
+// apply is unyielding — no implied await, result is a Future:
+let f = apply(async_fn, [])   // f is Value::Future
+let result = await f          // explicit await required
+```
 
 ### Low-Assurance Behavior
 

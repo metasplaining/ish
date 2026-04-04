@@ -26,6 +26,10 @@ pub enum YieldingClassification {
 /// Otherwise, walks the body looking for yielding nodes and function calls to
 /// known yielding functions in `env`.
 ///
+/// `fn_name` (if provided) is pre-populated as `Value::Null` in the analysis
+/// environment so that recursive self-calls do not trigger the "undefined function"
+/// error. Self-recursive calls are conservatively treated as unyielding.
+///
 /// `param_names` are treated as defined-but-unclassified: if the body calls a
 /// parameter by name, the call is treated as unyielding (conservative assumption
 /// for the stub analyzer — indirect calls are a known limitation).
@@ -34,20 +38,73 @@ pub fn classify_function(
     is_async: bool,
     env: &Environment,
     param_names: &[String],
+    fn_name: Option<&str>,
 ) -> Result<YieldingClassification, RuntimeError> {
     if is_async {
         return Ok(YieldingClassification::Yielding);
     }
-    // Create a child environment with parameters defined as Null.
-    // This prevents the analyzer from erroring on calls to parameter names.
+    // Create a child environment with parameters, the function's own name, and
+    // all locally declared variable names seeded as Null. This prevents the
+    // analyzer from erroring on:
+    //   - calls to parameter names (indirect calls, conservative = unyielding)
+    //   - recursive self-calls
+    //   - calls through local variables (e.g. `let f = fn() {...}; f()`)
     let analysis_env = env.child();
     for name in param_names {
         analysis_env.define(name.clone(), Value::Null);
     }
+    if let Some(name) = fn_name {
+        analysis_env.define(name.to_string(), Value::Null);
+    }
+    // Pre-pass: collect local variable names from the body's top-level block.
+    collect_local_var_names(body, &analysis_env);
     if contains_yielding_node(body, &analysis_env)? {
         Ok(YieldingClassification::Yielding)
     } else {
         Ok(YieldingClassification::Unyielding)
+    }
+}
+
+/// Pre-pass: walk the immediate statements of a block and add all variable
+/// declaration names to `env` as `Value::Null`. This allows the yielding
+/// classifier to treat calls to local variables as unyielding rather than
+/// erroring with "undefined function". Does not recurse into nested function
+/// declarations or lambda bodies.
+fn collect_local_var_names(stmt: &Statement, env: &Environment) {
+    match stmt {
+        Statement::Block { statements } => {
+            for s in statements {
+                collect_local_var_names(s, env);
+            }
+        }
+        Statement::VariableDecl { name, .. } => {
+            env.define(name.clone(), Value::Null);
+        }
+        Statement::If { then_block, else_block, .. } => {
+            collect_local_var_names(then_block, env);
+            if let Some(eb) = else_block {
+                collect_local_var_names(eb, env);
+            }
+        }
+        Statement::While { body, .. } | Statement::ForEach { body, .. } => {
+            collect_local_var_names(body, env);
+        }
+        Statement::TryCatch { body, catches, finally } => {
+            collect_local_var_names(body, env);
+            for c in catches {
+                collect_local_var_names(&c.body, env);
+            }
+            if let Some(f) = finally {
+                collect_local_var_names(f, env);
+            }
+        }
+        // Do not recurse into nested function declarations or lambda bodies —
+        // their locals are not in scope for the outer function.
+        Statement::FunctionDecl { name, .. } => {
+            // The function name itself is in scope for the outer function.
+            env.define(name.clone(), Value::Null);
+        }
+        _ => {}
     }
 }
 
@@ -185,8 +242,22 @@ fn contains_yielding_node(stmt: &Statement, env: &Environment) -> Result<bool, R
 fn expr_contains_yielding(expr: &Expression, env: &Environment) -> Result<bool, RuntimeError> {
     match expr {
         // Direct yielding nodes.
-        Expression::Await { .. } => Ok(true),
-        Expression::Spawn { .. } => Ok(true),
+        // Any await node makes the enclosing function yielding.
+        // Recurse into the inner expression for nested yielding nodes.
+        Expression::Await { expr } => {
+            expr_contains_yielding(expr, env)?;
+            Ok(true)
+        }
+        // Spawn does NOT make the caller yielding — spawn returns a Future
+        // immediately without suspending. Recurse into arguments only.
+        Expression::Spawn { args, .. } => {
+            for arg in args {
+                if expr_contains_yielding(arg, env)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
         Expression::CommandSubstitution(_) => Ok(true),
 
         // Function call: check if callee is a known yielding function.
@@ -213,10 +284,10 @@ fn expr_contains_yielding(expr: &Expression, env: &Environment) -> Result<bool, 
                         // Non-function value — not yielding (will error at call time)
                     }
                     Err(_) => {
-                        // Undefined variable — treat as unyielding (conservative).
-                        // This handles forward references and variables not yet in scope.
-                        // Known limitation: forward references to yielding functions
-                        // may be misclassified as unyielding.
+                        return Err(RuntimeError::system_error(
+                            format!("undefined function '{}' — forward references are not supported", name),
+                            ErrorCode::UndefinedVariable,
+                        ));
                     }
                 }
             }
@@ -322,7 +393,7 @@ mod tests {
     #[test]
     fn async_fn_is_yielding() {
         let body = Statement::Block { statements: vec![] };
-        let result = classify_function(&body, true, &empty_env(), &[]).unwrap();
+        let result = classify_function(&body, true, &empty_env(), &[], None).unwrap();
         assert_eq!(result, YieldingClassification::Yielding);
     }
 
@@ -333,7 +404,7 @@ mod tests {
                 value: Some(Expression::Literal(Literal::Int(42))),
             }],
         };
-        let result = classify_function(&body, false, &empty_env(), &[]).unwrap();
+        let result = classify_function(&body, false, &empty_env(), &[], None).unwrap();
         assert_eq!(result, YieldingClassification::Unyielding);
     }
 
@@ -341,18 +412,22 @@ mod tests {
     fn fn_with_await_is_yielding() {
         let body = Statement::Block {
             statements: vec![Statement::ExpressionStmt(Expression::Await {
-                callee: Box::new(Expression::Identifier("work".into())),
-                args: vec![],
+                expr: Box::new(Expression::FunctionCall {
+                    callee: Box::new(Expression::Identifier("work".into())),
+                    args: vec![],
+                }),
             })],
         };
         // The callee "work" must be defined for the analyzer not to error
         let env = env_with_yielding_fn("work");
-        let result = classify_function(&body, false, &env, &[]).unwrap();
+        let result = classify_function(&body, false, &env, &[], None).unwrap();
         assert_eq!(result, YieldingClassification::Yielding);
     }
 
     #[test]
-    fn fn_with_spawn_is_yielding() {
+    fn fn_with_spawn_is_unyielding() {
+        // A function whose body contains only spawn is unyielding —
+        // spawn does not make the caller yielding.
         let body = Statement::Block {
             statements: vec![Statement::ExpressionStmt(Expression::Spawn {
                 callee: Box::new(Expression::Identifier("work".into())),
@@ -360,8 +435,24 @@ mod tests {
             })],
         };
         let env = env_with_yielding_fn("work");
-        let result = classify_function(&body, false, &env, &[]).unwrap();
-        assert_eq!(result, YieldingClassification::Yielding);
+        let result = classify_function(&body, false, &env, &[], None).unwrap();
+        assert_eq!(result, YieldingClassification::Unyielding);
+    }
+
+    #[test]
+    fn spawn_in_unyielding_fn_is_valid() {
+        // Classifying a function that contains spawn should succeed (no error),
+        // and the result should be Unyielding.
+        let body = Statement::Block {
+            statements: vec![Statement::ExpressionStmt(Expression::Spawn {
+                callee: Box::new(Expression::Identifier("work".into())),
+                args: vec![],
+            })],
+        };
+        let env = env_with_yielding_fn("work");
+        let result = classify_function(&body, false, &env, &[], None);
+        assert!(result.is_ok(), "spawn in fn should not error");
+        assert_eq!(result.unwrap(), YieldingClassification::Unyielding);
     }
 
     #[test]
@@ -369,7 +460,7 @@ mod tests {
         let body = Statement::Block {
             statements: vec![Statement::Yield],
         };
-        let result = classify_function(&body, false, &empty_env(), &[]).unwrap();
+        let result = classify_function(&body, false, &empty_env(), &[], None).unwrap();
         assert_eq!(result, YieldingClassification::Yielding);
     }
 
@@ -386,7 +477,7 @@ mod tests {
                 })),
             )],
         };
-        let result = classify_function(&body, false, &empty_env(), &[]).unwrap();
+        let result = classify_function(&body, false, &empty_env(), &[], None).unwrap();
         assert_eq!(result, YieldingClassification::Yielding);
     }
 
@@ -396,8 +487,10 @@ mod tests {
         // The parent should still be unyielding.
         let inner_body = Statement::Block {
             statements: vec![Statement::ExpressionStmt(Expression::Await {
-                callee: Box::new(Expression::Identifier("work".into())),
-                args: vec![],
+                expr: Box::new(Expression::FunctionCall {
+                    callee: Box::new(Expression::Identifier("work".into())),
+                    args: vec![],
+                }),
             })],
         };
         let body = Statement::Block {
@@ -411,7 +504,7 @@ mod tests {
                 is_async: false,
             }],
         };
-        let result = classify_function(&body, false, &empty_env(), &[]).unwrap();
+        let result = classify_function(&body, false, &empty_env(), &[], None).unwrap();
         assert_eq!(result, YieldingClassification::Unyielding);
     }
 
@@ -424,7 +517,7 @@ mod tests {
             })],
         };
         let env = env_with_yielding_fn("async_fn");
-        let result = classify_function(&body, false, &env, &[]).unwrap();
+        let result = classify_function(&body, false, &env, &[], None).unwrap();
         assert_eq!(result, YieldingClassification::Yielding);
     }
 
@@ -437,22 +530,28 @@ mod tests {
             })],
         };
         let env = env_with_unyielding_fn("pure_fn");
-        let result = classify_function(&body, false, &env, &[]).unwrap();
+        let result = classify_function(&body, false, &env, &[], None).unwrap();
         assert_eq!(result, YieldingClassification::Unyielding);
     }
 
     #[test]
-    fn call_to_undefined_fn_is_unyielding() {
-        // Undefined functions are treated as unyielding (conservative).
-        // No error — forward references are a known limitation.
+    fn call_to_undefined_fn_is_error() {
+        // Undefined functions now cause an error at declaration time.
+        // Forward references are not supported.
         let body = Statement::Block {
             statements: vec![Statement::ExpressionStmt(Expression::FunctionCall {
                 callee: Box::new(Expression::Identifier("nonexistent".into())),
                 args: vec![],
             })],
         };
-        let result = classify_function(&body, false, &empty_env(), &[]).unwrap();
-        assert_eq!(result, YieldingClassification::Unyielding);
+        let result = classify_function(&body, false, &empty_env(), &[], None);
+        assert!(result.is_err(), "expected error for undefined function call");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("undefined function") || err.message.contains("E005"),
+            "expected undefined function error, got: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -470,6 +569,7 @@ mod tests {
             false,
             &empty_env(),
             &["callback".to_string()],
+            None,
         )
         .unwrap();
         assert_eq!(result, YieldingClassification::Unyielding);
@@ -486,7 +586,7 @@ mod tests {
                 background: false,
             }],
         };
-        let result = classify_function(&body, false, &empty_env(), &[]).unwrap();
+        let result = classify_function(&body, false, &empty_env(), &[], None).unwrap();
         assert_eq!(result, YieldingClassification::Yielding);
     }
 }

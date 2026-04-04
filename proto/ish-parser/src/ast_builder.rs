@@ -1025,22 +1025,12 @@ fn build_unary(pair: Pair<Rule>) -> Result<Expression, ParseError> {
             })
         }
         Rule::await_op => {
+            // await accepts any expression — build the operand directly
             let next = inner.next().unwrap();
-            match next.as_rule() {
-                Rule::call_expr => {
-                    let (callee, args) = build_call_expr(next)?;
-                    Ok(Expression::Await {
-                        callee: Box::new(callee),
-                        args,
-                    })
-                }
-                _ => {
-                    // await on non-call → Incomplete node
-                    Ok(Expression::Incomplete {
-                        kind: IncompleteKind::AwaitNonCall,
-                    })
-                }
-            }
+            let expr = build_expr_inner(next)?;
+            Ok(Expression::Await {
+                expr: Box::new(expr),
+            })
         }
         Rule::spawn_op => {
             let next = inner.next().unwrap();

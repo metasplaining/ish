@@ -336,9 +336,8 @@ impl<'a> fmt::Display for ExprDisplay<'a> {
             Expression::Incomplete { kind } => {
                 write!(f, "<incomplete: {:?}>", kind)
             }
-            Expression::Await { callee, args } => {
-                write!(f, "await {}({})", ExprDisplay(callee),
-                    args.iter().map(|a| format!("{}", ExprDisplay(a))).collect::<Vec<_>>().join(", "))
+            Expression::Await { expr } => {
+                write!(f, "await {}", ExprDisplay(expr))
             }
             Expression::Spawn { callee, args } => {
                 write!(f, "spawn {}({})", ExprDisplay(callee),

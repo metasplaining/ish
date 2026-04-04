@@ -34,12 +34,12 @@ assert_output "nested await" "5" "$output"
 output=$(run_ish 'async fn greet() { return "hello" }; println(await greet())')
 assert_output "await returning string" "hello" "$output"
 
-# --- await non-call → parse error (Incomplete node) ---
+# --- await non-call → E014 at runtime (await now accepts any expression) ---
 output=$(run_ish 'let v = await 42; println(v)')
-assert_output_contains "await non-call int is parse error" "unexpected end of input" "$output"
+assert_output_contains "await non-future int is E014" "E014" "$output"
 
 output=$(run_ish 'let v = await "hello"; println(v)')
-assert_output_contains "await non-call string is parse error" "unexpected end of input" "$output"
+assert_output_contains "await non-future string is E014" "E014" "$output"
 
 # --- spawn non-call → parse error (Incomplete node) ---
 output=$(run_ish 'let x = spawn 42')
@@ -59,5 +59,22 @@ assert_output "spawn unyielding is E013" "E013" "$output"
 # --- await unyielding function (analyzer-classified, no annotation) → E012 ---
 output=$(run_ish 'fn unyielding() { return 5 }; fn test() { try { await unyielding() } catch (e) { return error_code(e) } }; println(test())')
 assert_output "await fn without async is E012" "E012" "$output"
+
+# --- await a variable holding a future ---
+output=$(run_ish 'async fn work() { return 42 }
+                  let f = spawn work()
+                  println(await f)')
+assert_output "await variable resolves future" "42" "$output"
+
+# --- await a complex expression (list index) ---
+output=$(run_ish 'async fn work(x) { return x + 1 }
+                  let fs = [spawn work(1), spawn work(2)]
+                  println(await fs[0])')
+assert_output "await complex expression resolves future" "2" "$output"
+
+# --- await a non-future value → E014 ---
+output=$(run_ish 'let x = 42
+                  await x')
+assert_output_contains "await non-future throws E014" "E014" "$output"
 
 finish

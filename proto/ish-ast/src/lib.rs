@@ -175,8 +175,7 @@ pub enum Expression {
         is_async: bool,
     },
     Await {
-        callee: Box<Expression>,
-        args: Vec<Expression>,
+        expr: Box<Expression>,
     },
     Spawn {
         callee: Box<Expression>,
@@ -753,7 +752,8 @@ impl Expression {
                 _ => false,
             }),
             Expression::CommandSubstitution(cmd) => cmd.has_incomplete_continuable(),
-            Expression::Await { callee, args } | Expression::Spawn { callee, args } => {
+            Expression::Await { expr } => expr.has_incomplete_continuable(),
+            Expression::Spawn { callee, args } => {
                 callee.has_incomplete_continuable() || args.iter().any(|a| a.has_incomplete_continuable())
             }
             _ => false,
@@ -788,7 +788,8 @@ impl Expression {
                 _ => false,
             }),
             Expression::CommandSubstitution(cmd) => cmd.has_any_incomplete(),
-            Expression::Await { callee, args } | Expression::Spawn { callee, args } => {
+            Expression::Await { expr } => expr.has_any_incomplete(),
+            Expression::Spawn { callee, args } => {
                 callee.has_any_incomplete() || args.iter().any(|a| a.has_any_incomplete())
             }
             _ => false,

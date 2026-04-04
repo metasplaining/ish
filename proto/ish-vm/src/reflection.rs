@@ -312,12 +312,9 @@ pub fn expr_to_value(expr: &Expression) -> Value {
             map.insert("kind".to_string(), str_val("incomplete"));
             map.insert("incomplete_kind".to_string(), str_val(&format!("{:?}", kind)));
         }
-        Expression::Await { callee, args } => {
+        Expression::Await { expr } => {
             map.insert("kind".to_string(), str_val("await"));
-            map.insert("callee".to_string(), expr_to_value(callee));
-            map.insert("args".to_string(), Value::List(Gc::new(GcCell::new(
-                args.iter().map(|a| expr_to_value(a)).collect(),
-            ))));
+            map.insert("expr".to_string(), expr_to_value(expr));
         }
         Expression::Spawn { callee, args } => {
             map.insert("kind".to_string(), str_val("spawn"));

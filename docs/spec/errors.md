@@ -222,6 +222,8 @@ Well-known error codes are documented in [docs/errors/INDEX.md](../errors/INDEX.
 | E011 | `ConcurrencyError` | Concurrency error (cancelled task, panicked task, assurance discrepancy, already-awaited future) |
 | E012 | `TypeError` | Await type mismatch (`await` applied to a call to an explicitly unyielding function) |
 | E013 | `ConcurrencyError` | Spawn type mismatch (`spawn` applied to a call to an explicitly unyielding function) |
+| E014 | `TypeError` | Await type mismatch — `await` applied to a non-future value (runtime check) |
+| E015 | `ConcurrencyError` | Unyielding annotation violation — function declared `@[unyielding]` contains yielding operations |
 
 ### Concurrency Errors
 
@@ -230,6 +232,8 @@ Well-known error codes are documented in [docs/errors/INDEX.md](../errors/INDEX.
 **Await type mismatch (E012):** Thrown when `await` is applied to a call to a function with an explicit unyielding entry (`has_yielding_entry: Some(false)`). The error is thrown *before* the function is called. Does not apply to the ambiguous case (functions with no Yielding entry).
 
 **Spawn type mismatch (E013):** Thrown when `spawn` is applied to a call to a function with an explicit unyielding entry. Like E012, the error is thrown before the function is called.
+
+**Unyielding annotation violation (E015):** Thrown at function declaration time when a function annotated `@[unyielding]` is found by the code analyzer to contain yielding operations (an `await`, `yield`, or call to a yielding function). The function is never defined.
 
 See [docs/spec/concurrency.md](concurrency.md) for full cancellation semantics.
 

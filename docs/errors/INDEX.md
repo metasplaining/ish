@@ -38,6 +38,8 @@ Domain types are structural ish types (not entry types) defined in [errors.md](.
 | E011 | `AsyncError` | `ConcurrencyError` | Concurrency error — cancelled task, panicked task, assurance discrepancy, already-awaited future | `interpreter.rs` (await, spawn, audits) |
 | E012 | `AwaitUnyielding` | `TypeError` | Await type mismatch — `await` applied to a call to an explicitly unyielding function | `interpreter.rs` (Expression::Await) |
 | E013 | `SpawnUnyielding` | `ConcurrencyError` | Spawn type mismatch — `spawn` applied to a call to an explicitly unyielding function | `interpreter.rs` (Expression::Spawn) |
+| E014 | `AwaitNonFuture` | `TypeError` | Await type mismatch — `await` applied to a non-future value | `interpreter.rs` (Expression::Await, non-Future value) |
+| E015 | `UnyieldingViolation` | `ConcurrencyError` | Unyielding annotation violation — function declared `@[unyielding]` contains yielding operations | `interpreter.rs` (Statement::FunctionDecl, @[unyielding] annotation check) |
 
 ---
 

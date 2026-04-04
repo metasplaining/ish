@@ -115,13 +115,17 @@ fn register_io(env: &Environment, config: &BuiltinConfig) {
                 }
                 output.push_str(&arg.to_display_string());
             }
-            if let Some(ref sender) = print_sender {
-                let _ = sender.send(output);
-            } else {
-                print!("{}", output);
-            }
-            Ok(Value::Null)
-        }, Some(false)),
+            let sender = print_sender.clone();
+            let handle = tokio::task::spawn_local(async move {
+                if let Some(ref s) = sender {
+                    let _ = s.send(output);
+                } else {
+                    print!("{}", output);
+                }
+                Ok(Value::Null)
+            });
+            Ok(Value::Future(FutureRef::new(handle)))
+        }, Some(true)),
     );
 
     let println_sender = config.output_sender.clone();
@@ -135,13 +139,17 @@ fn register_io(env: &Environment, config: &BuiltinConfig) {
                 }
                 output.push_str(&arg.to_display_string());
             }
-            if let Some(ref sender) = println_sender {
-                let _ = sender.send(output);
-            } else {
-                println!("{}", output);
-            }
-            Ok(Value::Null)
-        }, Some(false)),
+            let sender = println_sender.clone();
+            let handle = tokio::task::spawn_local(async move {
+                if let Some(ref s) = sender {
+                    let _ = s.send(output);
+                } else {
+                    println!("{}", output);
+                }
+                Ok(Value::Null)
+            });
+            Ok(Value::Future(FutureRef::new(handle)))
+        }, Some(true)),
     );
 
     env.define(
@@ -150,15 +158,18 @@ fn register_io(env: &Environment, config: &BuiltinConfig) {
             if args.len() != 1 {
                 return Err(RuntimeError::system_error("read_file expects 1 argument", ErrorCode::ArgumentCountMismatch));
             }
-            if let Value::String(path) = &args[0] {
-                match std::fs::read_to_string(path.as_ref()) {
+            let path = match &args[0] {
+                Value::String(p) => p.to_string(),
+                _ => return Err(RuntimeError::system_error("read_file expects a string path", ErrorCode::TypeMismatch)),
+            };
+            let handle = tokio::task::spawn_local(async move {
+                match std::fs::read_to_string(&path) {
                     Ok(content) => Ok(Value::String(Rc::new(content))),
                     Err(e) => Err(RuntimeError::system_error(format!("read_file error: {}", e), ErrorCode::IoError)),
                 }
-            } else {
-                Err(RuntimeError::system_error("read_file expects a string path", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
+            });
+            Ok(Value::Future(FutureRef::new(handle)))
+        }, Some(true)),
     );
 
     env.define(
@@ -167,16 +178,19 @@ fn register_io(env: &Environment, config: &BuiltinConfig) {
             if args.len() != 2 {
                 return Err(RuntimeError::system_error("write_file expects 2 arguments", ErrorCode::ArgumentCountMismatch));
             }
-            if let (Value::String(path), Value::String(content)) = (&args[0], &args[1]) {
-                match std::fs::write(path.as_ref(), content.as_ref()) {
+            let (path, content) = match (&args[0], &args[1]) {
+                (Value::String(p), Value::String(c)) => (p.to_string(), c.to_string()),
+                _ => return Err(RuntimeError::system_error(
+                    "write_file expects (string path, string content)", ErrorCode::TypeMismatch)),
+            };
+            let handle = tokio::task::spawn_local(async move {
+                match std::fs::write(&path, &content) {
                     Ok(()) => Ok(Value::Null),
                     Err(e) => Err(RuntimeError::system_error(format!("write_file error: {}", e), ErrorCode::IoError)),
                 }
-            } else {
-                Err(RuntimeError::system_error(
-                    "write_file expects (string path, string content)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
+            });
+            Ok(Value::Future(FutureRef::new(handle)))
+        }, Some(true)),
     );
 }
 
@@ -600,6 +614,25 @@ fn register_objects(env: &Environment) {
 // ── Type checking ───────────────────────────────────────────────────────────
 
 fn register_types(env: &Environment) {
+    env.define(
+        "is_yielding".into(),
+        new_compiled_function("is_yielding", vec!["f".into()], vec![], None, |args| {
+            if args.len() != 1 {
+                return Err(RuntimeError::system_error(
+                    "is_yielding expects 1 argument",
+                    ErrorCode::ArgumentCountMismatch,
+                ));
+            }
+            match &args[0] {
+                Value::Function(f) => Ok(Value::Bool(f.has_yielding_entry == Some(true))),
+                _ => Err(RuntimeError::system_error(
+                    format!("is_yielding expects a function, got {}", args[0].type_name()),
+                    ErrorCode::TypeMismatch,
+                )),
+            }
+        }, Some(false)),
+    );
+
     env.define(
         "type_of".into(),
         new_compiled_function("type_of", vec![], vec![], None, |args| {

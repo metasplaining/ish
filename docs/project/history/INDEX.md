@@ -17,6 +17,7 @@ Entries are named `<isodate>-<topic>` for chronological sorting. Each entry is e
 
 | Date | Topic | Location |
 |------|-------|----------|
+| 2026-04-04 | Analyzer correctness fixes | [2026-04-04-analyzer-correctness/](2026-04-04-analyzer-correctness/summary.md) |
 | 2026-04-03 | Stubbed analyzer and yielding/unyielding function refactoring | [2026-04-03-stubbed-analyzer/](2026-04-03-stubbed-analyzer/summary.md) |
 | 2026-04-02 | Runtime extraction | [2026-04-02-runtime-extraction/](2026-04-02-runtime-extraction/summary.md) |
 | 2026-04-01 | Concurrency correctness fixes | [2026-04-01-concurrency-correctness/](2026-04-01-concurrency-correctness/summary.md) |

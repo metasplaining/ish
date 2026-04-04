@@ -187,9 +187,8 @@ mod_op = { "%" }
 unary = {
     not_op ~ unary |
     neg_op ~ unary |
-    await_op ~ call_expr |
-    spawn_op ~ call_expr |
     await_op ~ unary |
+    spawn_op ~ call_expr |
     spawn_op ~ unary |
     postfix
 }
@@ -198,7 +197,7 @@ neg_op = { "-" }
 await_op = { "await" }
 spawn_op = { "spawn" }
 
-// A call_expr is primary followed by call_args (for await/spawn grammar restriction)
+// A call_expr is primary followed by call_args (for spawn grammar restriction)
 call_expr = { primary ~ call_args }
 
 postfix = { primary ~ postfix_op* }

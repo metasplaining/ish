@@ -212,16 +212,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_assert_eq_pass() {
-        let vm = make_vm().await;
-        let prog = Program::new(vec![
-            Statement::expr_stmt(Expression::call(Expression::ident("assert_eq"), vec![
-                Expression::int(42),
-                Expression::int(42),
-                Expression::string("should be equal"),
-            ])),
-        ]);
-        let result = IshVm::run(&vm, &prog).await.unwrap();
-        assert_eq!(result, Value::Bool(true));
+        let local = tokio::task::LocalSet::new();
+        local.run_until(async {
+            let vm = make_vm().await;
+            let prog = Program::new(vec![
+                Statement::expr_stmt(Expression::call(Expression::ident("assert_eq"), vec![
+                    Expression::int(42),
+                    Expression::int(42),
+                    Expression::string("should be equal"),
+                ])),
+            ]);
+            let result = IshVm::run(&vm, &prog).await.unwrap();
+            assert_eq!(result, Value::Bool(true));
+        }).await;
     }
 
     #[tokio::test]

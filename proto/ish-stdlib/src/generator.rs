@@ -18,6 +18,15 @@ use ish_vm::interpreter::IshVm;
 
 /// Register the generator functions into the VM's global environment.
 pub async fn register_generator(vm: &Rc<RefCell<IshVm>>) {
+    // Pre-seed mutually recursive names as Null so the stub analyzer treats
+    // forward references between generate_stmt and generate_block as unyielding
+    // rather than erroring. These placeholders are overwritten when the
+    // generator program runs and defines the real functions.
+    {
+        let env = vm.borrow().global_env.clone();
+        env.define("generate_stmt".to_string(), ish_vm::value::Value::Null);
+        env.define("generate_block".to_string(), ish_vm::value::Value::Null);
+    }
     let generator_program = build_generator();
     IshVm::run(vm, &generator_program).await.unwrap();
 }

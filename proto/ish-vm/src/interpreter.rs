@@ -456,14 +456,14 @@ impl IshVm {
                 let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
                     params.iter().map(|p| p.type_annotation.clone()).collect();
                 // Classify function as yielding or unyielding using the code analyzer.
-                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names)?;
+                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names, Some(name.as_str()))?;
                 let has_yielding_entry = match classification {
                     crate::analyzer::YieldingClassification::Yielding => {
                         // If declared inside @[unyielding], reject the contradiction.
                         if yc.unyielding_depth > 0 {
                             return Err(RuntimeError::system_error(
                                 format!("function '{}' is annotated @[unyielding] but contains yielding operations", name),
-                                ErrorCode::AsyncError,
+                                ErrorCode::UnyieldingViolation,
                             ));
                         }
                         Some(true)
@@ -666,7 +666,7 @@ impl IshVm {
                         Err(e) => {
                             // Close already-initialized resources in reverse order
                             for (_, res) in initialized.into_iter().rev() {
-                                let _ = Self::try_close(vm, &res);
+                                let _ = Self::try_close_yielding(vm, &res).await;
                             }
                             return Err(e);
                         }
@@ -677,7 +677,7 @@ impl IshVm {
                 // Close resources in reverse order
                 let mut close_error: Option<Value> = None;
                 for (_, res) in initialized.into_iter().rev() {
-                    if let Err(_e) = Self::try_close(vm, &res) {
+                    if let Err(_e) = Self::try_close_yielding(vm, &res).await {
                         // If close fails, save the error
                         if close_error.is_none() {
                             close_error = Some(Value::String(Rc::new(_e.message)));
@@ -866,13 +866,38 @@ impl IshVm {
         }) // end Box::pin(async move { })
     }
 
-    /// Try to call close() on a value, used by WithBlock.
+    /// Try to call close() on a value, used by WithBlock (synchronous path).
     fn try_close(vm: &Rc<RefCell<IshVm>>, value: &Value) -> Result<(), RuntimeError> {
         if let Value::Object(ref obj_ref) = value {
             let map = obj_ref.borrow();
             if let Some(close_fn) = map.get("close").cloned() {
                 drop(map);
                 Self::call_function_inner(vm, &close_fn, &[])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Try to call close() on a value, used by WithBlock (yielding path).
+    /// If the close method returns a Future (yielding close fn), awaits it.
+    async fn try_close_yielding(vm: &Rc<RefCell<IshVm>>, value: &Value) -> Result<(), RuntimeError> {
+        if let Value::Object(ref obj_ref) = value {
+            let map = obj_ref.borrow();
+            if let Some(close_fn) = map.get("close").cloned() {
+                drop(map);
+                let result = Self::call_function_inner(vm, &close_fn, &[])?;
+                if let Value::Future(ref future_ref) = result {
+                    if let Some(handle) = future_ref.take() {
+                        match handle.await {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(e)) => return Err(e),
+                            Err(_join_err) => return Err(RuntimeError::system_error(
+                                "close task panicked",
+                                ErrorCode::AsyncError,
+                            )),
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -951,34 +976,44 @@ impl IshVm {
                     arg_vals.push(Self::eval_expression_yielding(vm, task, yc, arg, env).await?);
                 }
                 let result = Self::call_function_inner(vm, &func_val, &arg_vals)?;
-                // Implied await: if the result is a Future (from a yielding
-                // shim), await it transparently.
-                if let Value::Future(ref future_ref) = result {
-                    match future_ref.take() {
-                        Some(handle) => {
-                            match handle.await {
-                                Ok(inner) => inner,
-                                Err(join_err) => {
-                                    if join_err.is_cancelled() {
-                                        Err(RuntimeError::system_error(
-                                            "called task was cancelled",
-                                            ErrorCode::AsyncError,
-                                        ))
-                                    } else {
-                                        Err(RuntimeError::system_error(
-                                            format!("called task panicked: {}", join_err),
-                                            ErrorCode::AsyncError,
-                                        ))
+                // Implied await: if the callee is yielding and the result is a
+                // Future, await it transparently. Unyielding callees that return
+                // Value::Future (e.g. apply) are NOT implicitly awaited.
+                let is_yielding_callee = if let Value::Function(ref f) = func_val {
+                    f.has_yielding_entry == Some(true)
+                } else {
+                    false
+                };
+                if is_yielding_callee {
+                    if let Value::Future(ref future_ref) = result {
+                        match future_ref.take() {
+                            Some(handle) => {
+                                match handle.await {
+                                    Ok(inner) => inner,
+                                    Err(join_err) => {
+                                        if join_err.is_cancelled() {
+                                            Err(RuntimeError::system_error(
+                                                "called task was cancelled",
+                                                ErrorCode::AsyncError,
+                                            ))
+                                        } else {
+                                            Err(RuntimeError::system_error(
+                                                format!("called task panicked: {}", join_err),
+                                                ErrorCode::AsyncError,
+                                            ))
+                                        }
                                     }
                                 }
                             }
+                            None => {
+                                Err(RuntimeError::system_error(
+                                    "future has already been awaited",
+                                    ErrorCode::AsyncError,
+                                ))
+                            }
                         }
-                        None => {
-                            Err(RuntimeError::system_error(
-                                "future has already been awaited",
-                                ErrorCode::AsyncError,
-                            ))
-                        }
+                    } else {
+                        Ok(result)
                     }
                 } else {
                     Ok(result)
@@ -1050,7 +1085,8 @@ impl IshVm {
                 let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
                     params.iter().map(|p| p.type_annotation.clone()).collect();
                 // Classify lambda as yielding or unyielding using the code analyzer.
-                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names)?;
+                // Lambdas have no name (None), so recursive self-calls are not pre-seeded.
+                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names, None)?;
                 let has_yielding_entry = match classification {
                     crate::analyzer::YieldingClassification::Yielding => Some(true),
                     crate::analyzer::YieldingClassification::Unyielding => Some(false),
@@ -1180,7 +1216,7 @@ impl IshVm {
                 Err(RuntimeError::system_error(format!("incomplete expression: {:?}", kind), ErrorCode::TypeMismatch))
             }
 
-            Expression::Await { callee, args } => {
+            Expression::Await { expr } => {
                 // Audit: async_annotation — check if current function is not async
                 if let Some((false, ref fn_name)) = task.async_stack.last() {
                     let features = vm.borrow().ledger.active_features();
@@ -1194,62 +1230,84 @@ impl IshVm {
                         return Err(RuntimeError::system_error(report.message, ErrorCode::AsyncError));
                     }
                 }
-                // Resolve callee
-                let callee_val = Self::eval_expression_yielding(vm, task, yc, callee, env).await?;
 
-                // Check yielding classification before calling (E012)
-                if let Value::Function(ref f) = callee_val {
-                    if f.has_yielding_entry != Some(true) {
-                        return Err(RuntimeError::system_error(
-                            format!("cannot await unyielding function '{}'",
-                                f.name.as_deref().unwrap_or("<anonymous>")),
-                            ErrorCode::AwaitUnyielding,
-                        ));
+                // Evaluate the await operand to obtain a Future value.
+                //
+                // For FunctionCall expressions, we call the function WITHOUT implied
+                // await so we receive the raw Future from the yielding shim. Implied
+                // await would resolve the Future before we see it, leaving us with
+                // the resolved value (e.g. Int) rather than the Future to await.
+                //
+                // For all other expressions (identifiers, index access, etc.) we eval
+                // normally — the expression is expected to already hold a Future.
+                let val = if let Expression::FunctionCall { callee: call_callee, args: call_args } = expr.as_ref() {
+                    let callee_val = Self::eval_expression_yielding(vm, task, yc, call_callee, env).await?;
+                    // E012 check: unyielding callee
+                    if let Value::Function(ref f) = callee_val {
+                        if f.has_yielding_entry != Some(true) {
+                            return Err(RuntimeError::system_error(
+                                format!("cannot await unyielding function '{}'",
+                                    f.name.as_deref().unwrap_or("<anonymous>")),
+                                ErrorCode::AwaitUnyielding,
+                            ));
+                        }
                     }
-                }
+                    let mut arg_vals = Vec::with_capacity(call_args.len());
+                    for arg in call_args {
+                        arg_vals.push(Self::eval_expression_yielding(vm, task, yc, arg, env).await?);
+                    }
+                    // Call without implied await — get the raw Value::Future from the shim.
+                    Self::call_function_inner(vm, &callee_val, &arg_vals)?
+                } else {
+                    // Non-call expression: eval normally, expect a Value::Future.
+                    Self::eval_expression_yielding(vm, task, yc, expr, env).await?
+                };
 
-                // Evaluate arguments
-                let mut arg_vals = Vec::with_capacity(args.len());
-                for arg in args.iter() {
-                    arg_vals.push(Self::eval_expression_yielding(vm, task, yc, arg, env).await?);
-                }
-
-                // Call the function (synchronous — shim returns Future)
-                let val = Self::call_function_inner(vm, &callee_val, &arg_vals)?;
-
-                // If the result is a Future, await it
-                if let Value::Future(ref future_ref) = val {
-                    match future_ref.take() {
-                        Some(handle) => {
-                            match handle.await {
-                                Ok(result) => result,
-                                Err(join_err) => {
-                                    if join_err.is_cancelled() {
-                                        Err(RuntimeError::system_error(
-                                            "awaited task was cancelled".to_string(),
-                                            ErrorCode::AsyncError,
-                                        ))
-                                    } else {
-                                        Err(RuntimeError::system_error(
-                                            format!("awaited task panicked: {}", join_err),
-                                            ErrorCode::AsyncError,
-                                        ))
+                match val {
+                    Value::Future(ref future_ref) => {
+                        // Await the future
+                        match future_ref.take() {
+                            Some(handle) => {
+                                match handle.await {
+                                    Ok(result) => result,
+                                    Err(join_err) => {
+                                        if join_err.is_cancelled() {
+                                            Err(RuntimeError::system_error(
+                                                "awaited task was cancelled".to_string(),
+                                                ErrorCode::AsyncError,
+                                            ))
+                                        } else {
+                                            Err(RuntimeError::system_error(
+                                                format!("awaited task panicked: {}", join_err),
+                                                ErrorCode::AsyncError,
+                                            ))
+                                        }
                                     }
                                 }
                             }
-                        }
-                        None => {
-                            Err(RuntimeError::system_error(
-                                "future has already been awaited".to_string(),
-                                ErrorCode::AsyncError,
-                            ))
+                            None => {
+                                Err(RuntimeError::system_error(
+                                    "future has already been awaited".to_string(),
+                                    ErrorCode::AsyncError,
+                                ))
+                            }
                         }
                     }
-                } else {
-                    // Non-future result — the function was classified yielding but
-                    // returned a non-future. This shouldn't happen with self-contained
-                    // shims, but pass through for robustness.
-                    Ok(val)
+                    Value::Function(ref f) if f.has_yielding_entry == Some(false) => {
+                        // E012: await applied to an unyielding function value (non-call)
+                        Err(RuntimeError::system_error(
+                            format!("cannot await unyielding function '{}'",
+                                f.name.as_deref().unwrap_or("<anonymous>")),
+                            ErrorCode::AwaitUnyielding,
+                        ))
+                    }
+                    _ => {
+                        // E014: await applied to a non-future value
+                        Err(RuntimeError::system_error(
+                            format!("await requires a Future value, got {}", val.type_name()),
+                            ErrorCode::AwaitNonFuture,
+                        ))
+                    }
                 }
             }
 
@@ -1931,7 +1989,7 @@ impl IshVm {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
                     params.iter().map(|p| p.type_annotation.clone()).collect();
-                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names)?;
+                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names, Some(name.as_str()))?;
                 let has_yielding_entry = match classification {
                     crate::analyzer::YieldingClassification::Yielding => Some(true),
                     crate::analyzer::YieldingClassification::Unyielding => Some(false),
@@ -2375,7 +2433,7 @@ impl IshVm {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 let param_types: Vec<Option<ish_ast::TypeAnnotation>> =
                     params.iter().map(|p| p.type_annotation.clone()).collect();
-                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names)?;
+                let classification = crate::analyzer::classify_function(body, *is_async, env, &param_names, None)?;
                 let has_yielding_entry = match classification {
                     crate::analyzer::YieldingClassification::Yielding => Some(true),
                     crate::analyzer::YieldingClassification::Unyielding => Some(false),
@@ -2489,18 +2547,33 @@ impl IshVm {
                 Err(RuntimeError::system_error(format!("incomplete expression: {:?}", kind), ErrorCode::TypeMismatch))
             }
 
-            Expression::Await { .. } => {
+            Expression::Await { expr: _ } => {
                 Err(RuntimeError::system_error(
                     "await cannot be used in unyielding context",
                     ErrorCode::AsyncError,
                 ))
             }
 
-            Expression::Spawn { .. } => {
-                Err(RuntimeError::system_error(
-                    "spawn cannot be used in unyielding context",
-                    ErrorCode::AsyncError,
-                ))
+            Expression::Spawn { callee, args } => {
+                // Spawn is valid in unyielding context: start the task and
+                // return the Future without suspending.
+                let callee_val = Self::eval_expression_unyielding(vm, task, callee, env)?;
+                // Check yielding classification before spawning (E013)
+                if let Value::Function(ref f) = callee_val {
+                    if f.has_yielding_entry != Some(true) {
+                        return Err(RuntimeError::system_error(
+                            format!("cannot spawn unyielding function '{}'",
+                                f.name.as_deref().unwrap_or("<anonymous>")),
+                            ErrorCode::SpawnUnyielding,
+                        ));
+                    }
+                }
+                let mut arg_vals = Vec::with_capacity(args.len());
+                for arg in args.iter() {
+                    arg_vals.push(Self::eval_expression_unyielding(vm, task, arg, env)?);
+                }
+                let result = Self::call_function_inner(vm, &callee_val, &arg_vals)?;
+                Ok(result)
             }
         }
     }
@@ -3987,7 +4060,7 @@ r
     #[tokio::test]
     async fn narrowing_if_true_branch() {
         // When condition is true, true branch executes.
-        let result = run_source(r#"
+        let result = run_source_local(r#"
 standard typed_std [
     types(optional, runtime)
 ]
@@ -3996,14 +4069,14 @@ if x != null {
     println("not null")
 }
 x
-"#).await;
+"#).await.unwrap();
         assert_eq!(result, Value::Int(10));
     }
 
     #[tokio::test]
     async fn narrowing_if_else_branch() {
         // When condition is false, else branch executes.
-        let result = run_source(r#"
+        let result = run_source_local(r#"
 standard typed_std [
     types(optional, runtime)
 ]
@@ -4014,7 +4087,7 @@ if x != null {
     println("is null")
 }
 x
-"#).await;
+"#).await.unwrap();
         assert_eq!(result, Value::Null);
     }
 

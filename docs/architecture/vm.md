@@ -86,8 +86,9 @@ Arity checking, parameter type auditing, and return type auditing still occur ar
 The code analyzer classifies functions as yielding or unyielding at declaration time. It is a stub implementation — future versions will add type inference, reachability analysis, and other passes.
 
 The analyzer walks the function body AST looking for yielding nodes:
-- `Expression::Await`, `Expression::Spawn`, `Statement::Yield`, `Expression::CommandSubstitution`
+- `Expression::Await`, `Statement::Yield`, `Expression::CommandSubstitution`
 - `Expression::FunctionCall` where the callee resolves to a yielding function in the environment
+- `Expression::Spawn` does **not** make the enclosing function yielding — spawn returns a Future without suspending the caller. The spawn's arguments are recursed into for nested yielding sub-expressions.
 
 Functions declared `async` are immediately classified as yielding without body analysis. The analyzer does not recurse into nested `FunctionDecl` or `Lambda` bodies — those are classified independently when they are declared.
 
@@ -103,7 +104,7 @@ The interpreter has two parallel execution paths:
 | Variant | Functions | Description |
 |---------|-----------|-------------|
 | Yielding | `exec_statement_yielding`, `eval_expression_yielding` | Async (`Pin<Box<dyn Future>>`). Supports `await`, `spawn`, `yield`, command substitution. Performs implied await on bare function calls that return `Value::Future`. |
-| Unyielding | `exec_statement_unyielding`, `eval_expression_unyielding` | Synchronous. Errors on `await`, `spawn`, `yield`, and command substitution nodes. No `YieldContext` parameter. |
+| Unyielding | `exec_statement_unyielding`, `eval_expression_unyielding` | Synchronous. Errors on `await`, `yield`, and command substitution nodes. `spawn` is allowed — it starts a task and returns `Value::Future` without suspending. No `YieldContext` parameter. |
 
 Both variants share extracted helper functions for pure computations (binary/unary ops, variable definition, etc.). The yielding variant is used by `run()` and yielding shims; the unyielding variant is used by unyielding shims.
 
@@ -171,9 +172,11 @@ The throw audit only adds `@Error` entries. Other error classifications (`CodedE
 
 **Ledger builtins** need VM access (they query `self.ledger`), so they are intercepted by name in `call_function_inner` *before* the shim invocation. Stub shims are registered so the names are callable and metadata is available; reaching the stub body is an error.
 
-**`apply`** is a normal compiled function — it calls `(f.shim)(&args)` directly. If the target function is yielding, `apply` returns `Value::Future`; if unyielding, it returns the result directly. There is no special-case intercept for `apply`.
+**`apply`** is a normal compiled function — it calls `(f.shim)(&args)` directly. If the target function is yielding, `apply` returns `Value::Future`; if unyielding, it returns the result directly. There is no special-case intercept for `apply`. Because `apply` itself is unyielding (`has_yielding_entry == Some(false)`), calling `apply(async_fn, args)` returns `Value::Future` without implied await. The caller must explicitly `await` the result.
 
-**Implied await:** When `call_function_inner` returns `Value::Future` from a bare function call (not under `await` or `spawn`), the yielding `eval_expression` path awaits the future automatically. In the unyielding path, `Value::Future` is returned as-is (this would only occur if the caller explicitly invokes a yielding shim through `apply`). The `await_required` feature check applies at higher assurance levels.
+**Implied await:** When `call_function_inner` returns `Value::Future` from a bare call to a **yielding** function (not under `await` or `spawn`), the yielding `eval_expression` path awaits the future automatically. This guard is conditioned on `func.has_yielding_entry == Some(true)` — unyielding callees that return `Value::Future` (e.g., via `apply`) do not trigger implied await. The `await_required` feature check applies at higher assurance levels.
+
+**Spawn in unyielding context:** `spawn` is valid in an unyielding execution context — `eval_expression_unyielding` does not error on `Expression::Spawn`. The spawned task starts, and the unyielding caller receives the `Value::Future` directly without suspending.
 
 ---
 
