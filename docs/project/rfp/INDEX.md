@@ -34,6 +34,7 @@ Cleaned-up prompt files used as input to the `/propose` skill. Each RFP preserve
 | 2026-04-02 | Runtime Extraction | [runtime-extraction.md](runtime-extraction.md) |
 | 2026-04-03 | Stubbed Analyzer and Yielding/Unyielding Function Refactoring | [stubbed-analyzer.md](stubbed-analyzer.md) |
 | 2026-04-04 | Analyzer Correctness Fixes | [analyzer-correctness.md](analyzer-correctness.md) |
+| 2026-04-04 | Agent Instructions Improvements | [agent-instructions-improvements.md](agent-instructions-improvements.md) |
 
 ---
 

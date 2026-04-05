@@ -31,8 +31,38 @@ Update a design proposal based on a punch list or inline decisions. Produces a c
 
 6. **Scan the entire document for internal contradictions.** Resolve any contradictions before saving.
 
+6a. **Gap Detection:**
+   1. For each feature section, apply the gap detection checklist:
+      - Are the error cases specified?
+      - Is concurrency behavior addressed (if the feature touches async code)?
+      - Is there a testability statement (what acceptance test would verify this)?
+      - Note: backward-compatibility analysis is explicitly excluded.
+   2. For each uncovered item, inject:
+      ```
+      **Open Question:** [specific description of the gap]
+      -->
+      ```
+   3. If any open questions were added, note this in the summary.
+
+6b. **Split Evaluation:**
+   1. Count extractable, independent implementation steps.
+   2. If ≥ 10: draft a split proposal and present it as a decision point:
+      ```
+      **Decision:** Split into Proposal A ([list features]) and Proposal B ([list features])?
+      -->
+      ```
+      Also note: if the human accepts the split, create new proposal files, update the history directory, and mark the parent proposal as split in its frontmatter.
+   3. If < 10: continue with the single proposal.
+
 7. **Save the replacement** at the same path, overwriting the previous version.
 
 8. **Append a narrative** to the `summary.md` file in the design history directory explaining what the punch list requested and how the proposal changed.
 
 9. **If an implementation plan exists** from a prior iteration (in `docs/project/plans/`), delete it — the design has changed and the plan is stale.
+
+## Output Status
+
+Each invocation appends a status line to its output:
+```
+Status: completed | blocked (see clarifications/<date>-<topic>.md)
+```

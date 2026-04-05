@@ -41,6 +41,7 @@ The language is being designed iteratively. A Rust prototype explores key ideas.
 - [x] Runtime extraction (shim-only architecture, ish-core, ish-runtime type extraction, ErrorCode enum, apply builtin)
 - [x] Stubbed code analyzer and yielding/unyielding function refactoring (PENDING_INTERP_CALL removal)
 - [x] Analyzer correctness fixes (is_yielding builtin, spawn reclassification, implied await scope, await grammar expansion)
+- [x] Agent Infrastructure (vendor-agnostic file layout, AGENTS.md rewrite, /update-agents skill)
 
 ### In Progress
 - [ ] Memory management design (GC vs. manual vs. arena)

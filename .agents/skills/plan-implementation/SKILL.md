@@ -33,9 +33,35 @@ Generate an implementation plan from an accepted design proposal. The plan is th
 
 7. **Include a Reference section** with any information needed during implementation that would otherwise require reading historical documents.
 
-8. **Save to `docs/project/plans/<name>.md`.**
+7a. **Context File Rules** (for directory plans):
+   - Content is verbatim from the authoritative source (spec, architecture doc, or proposal).
+   - Each context file begins with: `*Extracted verbatim from [source](path/to/source.md) §Section Name.*`
+   - Do not paraphrase or summarize.
+   - If a context file requires information from a source that does not exist or is incomplete, treat this as a gap: add to a gap list and do not proceed to saving.
+
+7b. **Scrutiny** — before saving, check each phase:
+   - Does each task have enough detail for an agent to execute without reading the original spec?
+   - Does each verification step have a concrete command to run?
+   - Is every context file available and non-empty?
+
+   If any phase fails: write a clarification request at `docs/project/clarifications/<date>-<topic>.md`. Do not save the incomplete plan. Output `Status: blocked (see clarifications/<date>-<topic>.md)` and stop.
+
+8. **Save:**
+   - If the plan has ≤ 5 implementation steps: save to `docs/project/plans/<name>.md` (current behavior).
+   - If the plan has > 5 implementation steps: save to a directory:
+     ```
+     docs/project/plans/<name>/
+       overview.md          — summary, requirements, phase dependency graph
+       context/
+         <topic>.md         — verbatim extracts from authoritative sources
+       phase-1.md
+       phase-2.md
+       ...
+     ```
 
 ## Output Format
+
+**Single-file plan** (≤ 5 implementation steps):
 
 ```markdown
 ---
@@ -85,4 +111,47 @@ Agent must update artifacts in this order.>
 <Any information the implementing agent needs that would otherwise
 require reading historical documents — e.g., original file locations
 for files being moved, original terminology for terms being renamed.>
+```
+
+**Directory plan** (> 5 implementation steps):
+
+```
+docs/project/plans/<name>/
+  overview.md          — summary, requirements, phase dependency graph
+  context/
+    <topic>.md         — verbatim extracts from authoritative sources
+  phase-1.md
+  phase-2.md
+  ...
+```
+
+Each phase file follows this format:
+
+```markdown
+# Phase N: <name>
+
+*Part of: [<plan-name>/overview.md](overview.md)*
+
+## Context Files
+- [context/<topic>.md](context/<topic>.md) — <what it contains>
+
+## Requirements
+- <testable statement of expected behavior>
+
+## Tasks
+- [ ] 1. <task> — `<file>`
+- [ ] 2. <task> — `<file>`
+...
+
+## Verification
+Run: `<command>`
+Check: <what to look for in the output>
+Invoke: `/verify <plan-name>/phase-N.md`
+```
+
+## Output Status
+
+Each invocation appends a status line to its output:
+```
+Status: completed | blocked (see clarifications/<date>-<topic>.md)
 ```

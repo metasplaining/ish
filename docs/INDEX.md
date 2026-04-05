@@ -21,6 +21,7 @@ Master index of all ish documentation. Start here to find anything.
 | [GLOSSARY.md](../GLOSSARY.md) | Terminology definitions |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Contributor conventions |
 | [AGENTS.md](../AGENTS.md) | AI agent instructions |
+| [.agents/skills/](../.agents/skills/) | Canonical agent skill files (vendor dirs are symlinks) |
 
 ---
 
