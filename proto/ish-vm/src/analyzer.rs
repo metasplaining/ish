@@ -231,7 +231,8 @@ fn contains_yielding_node(stmt: &Statement, env: &Environment) -> Result<bool, R
         // Non-yielding statements.
         Statement::TypeAlias { .. }
         | Statement::Use { .. }
-        | Statement::ModDecl { .. }
+        | Statement::DeclareBlock { .. }
+        | Statement::Bootstrap { .. }
         | Statement::StandardDef { .. }
         | Statement::EntryTypeDef { .. }
         | Statement::Incomplete { .. } => Ok(false),

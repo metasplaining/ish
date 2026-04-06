@@ -62,6 +62,22 @@ impl ProgramBuilder {
         self.stmt(Statement::expr_stmt(expr))
     }
 
+    pub fn use_directive(self, module_path: Vec<impl Into<String>>) -> Self {
+        self.stmt(Statement::Use {
+            module_path: module_path.into_iter().map(|s| s.into()).collect(),
+            alias: None,
+            selective: None,
+        })
+    }
+
+    pub fn declare_block(self, body: Vec<Statement>) -> Self {
+        self.stmt(Statement::DeclareBlock { body })
+    }
+
+    pub fn bootstrap(self, source: BootstrapSource) -> Self {
+        self.stmt(Statement::Bootstrap { source })
+    }
+
     pub fn build(self) -> Program {
         Program::new(self.statements)
     }

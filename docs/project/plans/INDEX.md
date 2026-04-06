@@ -15,6 +15,7 @@ Consolidated TODO lists derived from accepted design proposals. Each plan is the
 
 | Date | Topic | Status | File |
 |------|-------|--------|------|
+| 2026-04-05 | Module System Core A-1 — Language Representation | ready | [module-system-core-a1/overview.md](module-system-core-a1/overview.md) |
 | 2026-04-05 | Agent Infrastructure | completed | [agent-infrastructure/overview.md](agent-infrastructure/overview.md) |
 | 2026-04-04 | Agent Pipeline Skills | completed | [agent-pipeline-skills/overview.md](agent-pipeline-skills/overview.md) |
 | 2026-04-04 | Analyzer Correctness Fixes | completed | [analyzer-correctness.md](analyzer-correctness.md) |

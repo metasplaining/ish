@@ -135,17 +135,16 @@ pub fn stmt_to_value(stmt: &Statement) -> Value {
             map.insert("kind".to_string(), str_val("type_alias"));
             map.insert("name".to_string(), str_val(name));
         }
-        Statement::Use { path } => {
+        Statement::Use { module_path, .. } => {
             map.insert("kind".to_string(), str_val("use"));
-            let path_vals: Vec<Value> = path.iter().map(|s| str_val(s)).collect();
+            let path_vals: Vec<Value> = module_path.iter().map(|s| str_val(s)).collect();
             map.insert("path".to_string(), new_list(path_vals));
         }
-        Statement::ModDecl { name, body, .. } => {
-            map.insert("kind".to_string(), str_val("mod_decl"));
-            map.insert("name".to_string(), str_val(name));
-            if let Some(b) = body {
-                map.insert("body".to_string(), stmt_to_value(b));
-            }
+        Statement::DeclareBlock { .. } => {
+            map.insert("kind".to_string(), str_val("declare_block"));
+        }
+        Statement::Bootstrap { .. } => {
+            map.insert("kind".to_string(), str_val("bootstrap"));
         }
         Statement::ShellCommand { command, args, background, .. } => {
             map.insert("kind".to_string(), str_val("shell_command"));

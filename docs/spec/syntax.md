@@ -3,7 +3,7 @@ title: ish Syntax
 category: spec
 audience: [all]
 status: draft
-last-verified: 2026-03-14
+last-verified: 2026-04-05
 depends-on: [docs/spec/types.md, docs/spec/assurance-ledger.md, docs/spec/modules.md, docs/spec/execution.md, docs/project/proposals/language-syntax.md]
 ---
 
@@ -446,16 +446,66 @@ Nominal typing is handled through entries/annotations in the assurance ledger, n
 
 ## Visibility
 
-All symbols default to `pub(self)` (visible only within the current module). The default visibility is configurable via a standard.
+Three visibility levels, applied as a keyword before `fn`, `let`, or `type` declarations. See the Module Directives section for full examples.
+
+| Keyword | Meaning |
+|---------|---------|
+| *(omitted)* | `pkg` — visible to all project members (default) |
+| `pkg` | Same as omitting — explicit default |
+| `priv` | Current module only |
+| `pub` | External dependents |
+
+---
+
+## Module Directives
+
+### Visibility Keywords
+
+Three levels, used before `fn`, `let`, or `type`:
 
 ```ish
-fn internal_helper() { ... }         // pub(self) — default
-pub fn exported() { ... }            // pub(global)
-pub(super) fn parent_only() { ... }  // visible to parent module
-pub(project) fn project_wide() { ... } // visible within the project
+priv fn internal() { ... }   // current module only
+fn default_fn() { ... }      // pkg — all project members (default when omitted)
+pkg fn also_default() { ... } // pkg — explicit, same as omitting
+pub fn exported() { ... }    // external dependents
 ```
 
-Bare `pub` means `pub(global)`.
+### `use` Directive — Four Forms
+
+```ish
+use net/http                      // plain — module bound to last segment (http)
+use net/http as h                 // aliased — module bound to h
+use net/http { Client }           // selective — only Client imported
+use net/http { Client as C, Request }  // selective with rename
+use example.com/foo/bar           // external package — domain segment prefix
+```
+
+Module paths use `/` as separator. The `src/` prefix is implicit and never written. `index.ish` files are imported by their directory path: `use net` resolves to `src/net/index.ish`.
+
+### `declare { }` Block
+
+```ish
+declare {
+  fn even(n: int) -> bool { if n == 0 { return true } else { return odd(n - 1) } }
+  fn odd(n: int) -> bool { if n == 0 { return false } else { return even(n - 1) } }
+}
+```
+
+An anonymous, declarations-only grouping. May contain `fn`, `let`, and `type` declarations. Top-level commands are rejected at evaluation time. Files loaded via `use` are implicitly wrapped in a `declare { }` block.
+
+### `bootstrap` Directive — Three Forms
+
+```ish
+bootstrap "path/to/project.json"          // filesystem path
+bootstrap "https://example.com/cfg.json"  // HTTPS URL (resolved via ISH_PROXY)
+bootstrap { "ish": ">=1.0", "deps": {} }  // inline JSON
+```
+
+Valid only in standalone scripts (not under any `project.json` hierarchy). Provides the same configuration as `project.json` for a single file.
+
+### Note on `index.ish`
+
+See [docs/spec/modules.md](modules.md) for the full `index.ish` naming convention and module-to-file mapping rules.
 
 ---
 
@@ -477,15 +527,7 @@ See [docs/spec/assurance-ledger.md](assurance-ledger.md) for full details.
 
 ## Modules
 
-```ish
-use std::io
-use mylib::utils
-
-mod helpers
-pub mod api
-```
-
-See [docs/spec/modules.md](modules.md) for full details.
+Module syntax is documented in the Module Directives section above. See [docs/spec/modules.md](modules.md) for full module system semantics.
 
 ---
 
@@ -493,7 +535,7 @@ See [docs/spec/modules.md](modules.md) for full details.
 
 In the interactive shell, lines are parsed as **command invocations** unless they begin with a recognized language keyword or have unambiguous language syntax (assignment, type annotation, etc.).
 
-**Recognized keywords** (non-exhaustive): `let`, `mut`, `fn`, `if`, `else`, `while`, `for`, `match`, `return`, `use`, `mod`, `pub`, `type`, `standard`, `entry`, `try`, `catch`, `finally`, `throw`, `with`, `defer`, `break`, `continue`.
+**Recognized keywords** (non-exhaustive): `let`, `mut`, `fn`, `if`, `else`, `while`, `for`, `match`, `return`, `use`, `priv`, `pkg`, `pub`, `declare`, `bootstrap`, `type`, `standard`, `entry`, `try`, `catch`, `finally`, `throw`, `with`, `defer`, `break`, `continue`.
 
 ```ish
 // Command invocations (bare words)

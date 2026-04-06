@@ -42,7 +42,9 @@ statement = _{
     match_stmt |
     type_alias |
     use_stmt |
-    mod_stmt |
+    declare_block |
+    unterminated_declare_block |
+    bootstrap_stmt |
     assign_stmt |
     expression_stmt |
     shell_command |
@@ -50,7 +52,7 @@ statement = _{
 }
 
 // --- Annotations and Assurance Ledger ---
-annotated_stmt = { (annotation ~ NEWLINE*)+ ~ (fn_decl | let_stmt | type_alias | mod_stmt | block | while_stmt | for_stmt) }
+annotated_stmt = { (annotation ~ NEWLINE*)+ ~ (fn_decl | let_stmt | type_alias | block | while_stmt | for_stmt) }
 annotation = { standard_annotation | entry_annotation }
 standard_annotation = { "@standard[" ~ annotation_args ~ "]" }
 unterminated_standard_annotation = { "@standard[" ~ annotation_args? ~ EOI }
@@ -71,9 +73,9 @@ unterminated_entry_type_def = { "entry" ~ "type" ~ identifier ~ "{" ~ NEWLINE* ~
 entry_type_field = { identifier ~ ":" ~ expression }
 
 // --- Visibility ---
-pub_modifier = { "pub" ~ ("(" ~ identifier ~ ")")? }
+visibility = { "priv" | "pkg" | "pub" }
 
-let_stmt = { pub_modifier? ~ "let" ~ mut_kw? ~ identifier ~ (":" ~ type_annotation)? ~ "=" ~ expression }
+let_stmt = { visibility? ~ "let" ~ mut_kw? ~ identifier ~ (":" ~ type_annotation)? ~ "=" ~ expression }
 mut_kw = { "mut" }
 
 assign_stmt = { assign_target ~ "=" ~ expression }
@@ -82,7 +84,7 @@ assign_target = {
 }
 
 fn_decl = {
-    pub_modifier? ~ async_kw? ~ "fn" ~ identifier ~ generic_params? ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_annotation)? ~ block
+    visibility? ~ async_kw? ~ "fn" ~ identifier ~ generic_params? ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_annotation)? ~ block
 }
 async_kw = { "async" }
 generic_params = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
@@ -155,12 +157,29 @@ tuple_type = { "(" ~ type_annotation ~ ("," ~ type_annotation)+ ~ ","? ~ ")" }
 unterminated_tuple_type = { "(" ~ (type_annotation ~ ("," ~ type_annotation)*)? ~ EOI }
 
 // --- Type Alias ---
-type_alias = { pub_modifier? ~ "type" ~ identifier ~ "=" ~ type_annotation }
+type_alias = { visibility? ~ "type" ~ identifier ~ "=" ~ type_annotation }
 
 // --- Modules ---
-use_stmt = { "use" ~ module_path }
-module_path = { identifier ~ ("::" ~ identifier)* }
-mod_stmt = { pub_modifier? ~ "mod" ~ identifier ~ block? }
+use_stmt = {
+    "use" ~ module_path ~ "{" ~ selective_import_list ~ "}" |
+    "use" ~ module_path ~ ("as" ~ identifier)?
+}
+selective_import_list = { selective_import ~ ("," ~ selective_import)* ~ ","? }
+selective_import      = { identifier ~ ("as" ~ identifier)? }
+module_path = {
+    domain_segment ~ ("/" ~ path_segment)* |
+    path_segment ~ ("/" ~ path_segment)*
+}
+domain_segment = @{ identifier ~ "." ~ identifier ~ ("." ~ identifier)* }
+path_segment   = @{ ".." | "." | identifier }
+
+// --- Declare / Bootstrap ---
+declare_block           = { "declare" ~ "{" ~ NEWLINE* ~ (statement ~ (stmt_sep ~ statement)* ~ stmt_sep?)? ~ "}" }
+unterminated_declare_block = { "declare" ~ "{" ~ NEWLINE* ~ (statement ~ (stmt_sep ~ statement)* ~ stmt_sep?)? ~ EOI }
+
+bootstrap_stmt     = { "bootstrap" ~ (string_literal | inline_json_object) }
+inline_json_object = { "{" ~ json_content ~ "}" }
+json_content       = { (!("{"|"}") ~ ANY | inline_json_object)* }
 
 // --- Expressions (precedence climbing) ---
 // Lowest precedence at top, highest at bottom.
@@ -375,9 +394,9 @@ shell_bare_word = @{ (!(WHITESPACE | NEWLINE | ";" | "|" | "&" | ">" | "\"" | "'
 keyword = {
     ("let" | "mut" | "fn" | "if" | "else" | "while" | "for" | "in" |
      "return" | "true" | "false" | "null" | "and" | "or" | "not" |
-     "match" | "use" | "mod" | "pub" | "type" | "standard" | "entry" |
+     "match" | "use" | "pub" | "pkg" | "priv" | "type" | "standard" | "entry" |
      "try" | "catch" | "finally" | "throw" | "with" | "defer" |
-     "async" | "await" | "spawn" | "yield" |
+     "async" | "await" | "spawn" | "yield" | "declare" | "bootstrap" |
      "break" | "continue") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 identifier = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }

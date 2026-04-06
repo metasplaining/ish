@@ -24,12 +24,13 @@ pub struct Span {
 /// succeeds (parser-matches-everything philosophy).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IncompleteKind {
-    // Brace-delimited (5)
+    // Brace-delimited (6)
     Block,
     ObjectLiteral,
     Match,
     EntryTypeDef,
     ObjectType,
+    DeclareBlock,
     // Bracket-delimited (5)
     ListLiteral,
     StandardDef,
@@ -263,12 +264,15 @@ pub enum Statement {
         visibility: Option<Visibility>,
     },
     Use {
-        path: Vec<String>,
+        module_path: Vec<String>,
+        alias: Option<String>,
+        selective: Option<Vec<SelectiveImport>>,
     },
-    ModDecl {
-        name: String,
-        body: Option<Box<Statement>>, // None = file module, Some = inline block
-        visibility: Option<Visibility>,
+    DeclareBlock {
+        body: Vec<Statement>,
+    },
+    Bootstrap {
+        source: BootstrapSource,
     },
     ShellCommand {
         command: String,
@@ -349,9 +353,22 @@ pub enum RedirectKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Visibility {
-    Private,
-    Public,
-    PubScope(String), // e.g. pub(super), pub(global)
+    Priv,   // priv — current module only
+    Pkg,    // pkg — all project members (default when omitted)
+    Pub,    // pub — external dependents
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelectiveImport {
+    pub name: String,
+    pub alias: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum BootstrapSource {
+    Path(String),
+    Url(String),
+    Inline(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -664,10 +681,13 @@ impl Statement {
                 subject.has_incomplete_continuable()
                     || arms.iter().any(|a| a.body.has_incomplete_continuable())
             }
+            Statement::DeclareBlock { body } => {
+                body.iter().any(|s| s.has_incomplete_continuable())
+            }
             Statement::ShellCommand { .. }
             | Statement::TypeAlias { .. }
             | Statement::Use { .. }
-            | Statement::ModDecl { .. }
+            | Statement::Bootstrap { .. }
             | Statement::StandardDef { .. }
             | Statement::EntryTypeDef { .. }
             | Statement::Yield => false,
@@ -712,10 +732,13 @@ impl Statement {
                 subject.has_any_incomplete()
                     || arms.iter().any(|a| a.body.has_any_incomplete())
             }
+            Statement::DeclareBlock { body } => {
+                body.iter().any(|s| s.has_any_incomplete())
+            }
             Statement::ShellCommand { .. }
             | Statement::TypeAlias { .. }
             | Statement::Use { .. }
-            | Statement::ModDecl { .. }
+            | Statement::Bootstrap { .. }
             | Statement::StandardDef { .. }
             | Statement::EntryTypeDef { .. }
             | Statement::Yield => false,
@@ -949,5 +972,66 @@ mod tests {
         let json = serde_json::to_string(&program).unwrap();
         let parsed: Program = serde_json::from_str(&json).unwrap();
         assert_eq!(program, parsed);
+    }
+
+    #[test]
+    fn test_visibility_roundtrip() {
+        for vis in [Visibility::Priv, Visibility::Pkg, Visibility::Pub] {
+            let json = serde_json::to_string(&vis).unwrap();
+            let parsed: Visibility = serde_json::from_str(&json).unwrap();
+            assert_eq!(vis, parsed);
+        }
+    }
+
+    #[test]
+    fn test_use_plain_roundtrip() {
+        let stmt = Statement::Use {
+            module_path: vec!["net".into(), "http".into()],
+            alias: None,
+            selective: None,
+        };
+        let json = serde_json::to_string(&stmt).unwrap();
+        let parsed: Statement = serde_json::from_str(&json).unwrap();
+        assert_eq!(stmt, parsed);
+    }
+
+    #[test]
+    fn test_use_aliased_roundtrip() {
+        let stmt = Statement::Use {
+            module_path: vec!["net".into(), "http".into()],
+            alias: Some("h".into()),
+            selective: None,
+        };
+        let json = serde_json::to_string(&stmt).unwrap();
+        let parsed: Statement = serde_json::from_str(&json).unwrap();
+        assert_eq!(stmt, parsed);
+    }
+
+    #[test]
+    fn test_use_selective_roundtrip() {
+        let stmt = Statement::Use {
+            module_path: vec!["net".into(), "http".into()],
+            alias: None,
+            selective: Some(vec![
+                SelectiveImport { name: "Client".into(), alias: None },
+                SelectiveImport { name: "Request".into(), alias: Some("Req".into()) },
+            ]),
+        };
+        let json = serde_json::to_string(&stmt).unwrap();
+        let parsed: Statement = serde_json::from_str(&json).unwrap();
+        assert_eq!(stmt, parsed);
+    }
+
+    #[test]
+    fn test_declare_block_construction() {
+        let block = Statement::DeclareBlock {
+            body: vec![
+                Statement::function_decl("even", vec![Parameter::new("n")], Statement::block(vec![])),
+                Statement::function_decl("odd", vec![Parameter::new("n")], Statement::block(vec![])),
+            ],
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        let parsed: Statement = serde_json::from_str(&json).unwrap();
+        assert_eq!(block, parsed);
     }
 }

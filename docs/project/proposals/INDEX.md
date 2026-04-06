@@ -37,6 +37,11 @@ Structured proposals generated from prompt files using the `/propose` skill. Eac
 | 2026-04-02 | Runtime Extraction | accepted | [runtime-extraction.md](runtime-extraction.md) |
 | 2026-04-03 | Stubbed Analyzer and Yielding/Unyielding Function Refactoring | accepted | [stubbed-analyzer.md](stubbed-analyzer.md) |
 | 2026-04-04 | Analyzer Correctness Fixes | accepted | [analyzer-correctness.md](analyzer-correctness.md) |
+| 2026-04-05 | Module System | split | [module-system.md](module-system.md) |
+| 2026-04-05 | Module System — Core | split | [module-system-core.md](module-system-core.md) |
+| 2026-04-05 | Module System — Core A-1: Language Representation | accepted | [module-system-core-a1.md](module-system-core-a1.md) |
+| 2026-04-05 | Module System — Core A-2: Execution and Tooling | proposal | [module-system-core-a2.md](module-system-core-a2.md) |
+| 2026-04-05 | Module System — Package Management | proposal | [module-system-packages.md](module-system-packages.md) |
 
 ---
 

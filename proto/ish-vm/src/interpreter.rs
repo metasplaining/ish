@@ -713,8 +713,13 @@ impl IshVm {
                 Ok(ControlFlow::None)
             }
 
-            Statement::ModDecl { .. } => {
-                // Module declarations are structural, not runtime
+            Statement::DeclareBlock { .. } => {
+                // Execution deferred to A-2
+                Ok(ControlFlow::None)
+            }
+
+            Statement::Bootstrap { .. } => {
+                // Execution deferred to A-2
                 Ok(ControlFlow::None)
             }
 
@@ -2205,7 +2210,8 @@ impl IshVm {
 
             Statement::TypeAlias { .. } => Ok(ControlFlow::None),
             Statement::Use { .. } => Ok(ControlFlow::None),
-            Statement::ModDecl { .. } => Ok(ControlFlow::None),
+            Statement::DeclareBlock { .. } => Ok(ControlFlow::None),
+            Statement::Bootstrap { .. } => Ok(ControlFlow::None),
 
             Statement::ShellCommand { .. } => {
                 Err(RuntimeError::system_error(

@@ -3,7 +3,7 @@ title: Development History
 category: project
 audience: [all]
 status: draft
-last-verified: 2026-03-19
+last-verified: 2026-04-05
 depends-on: [docs/INDEX.md]
 ---
 
@@ -17,6 +17,8 @@ Entries are named `<isodate>-<topic>` for chronological sorting. Each entry is e
 
 | Date | Topic | Location |
 |------|-------|----------|
+| 2026-04-05 | Module system A-1 — language representation acceptance | [2026-04-05-module-system-a1/](2026-04-05-module-system-a1/summary.md) |
+| 2026-04-05 | Module system design | [2026-04-05-module-system/](2026-04-05-module-system/summary.md) |
 | 2026-04-04 | Agent instructions improvements | [2026-04-04-agent-instructions-improvements/](2026-04-04-agent-instructions-improvements/summary.md) |
 | 2026-04-04 | Analyzer correctness fixes | [2026-04-04-analyzer-correctness/](2026-04-04-analyzer-correctness/summary.md) |
 | 2026-04-03 | Stubbed analyzer and yielding/unyielding function refactoring | [2026-04-03-stubbed-analyzer/](2026-04-03-stubbed-analyzer/summary.md) |

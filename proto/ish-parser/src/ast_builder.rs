@@ -53,7 +53,8 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, ParseError> {
         Rule::defer_stmt => build_defer_stmt(pair),
         Rule::type_alias => build_type_alias(pair),
         Rule::use_stmt => build_use_stmt(pair),
-        Rule::mod_stmt => build_mod_stmt(pair),
+        Rule::declare_block => build_declare_block(pair),
+        Rule::bootstrap_stmt => build_bootstrap_stmt(pair),
         Rule::shell_command => build_shell_command(pair),
         Rule::annotated_stmt => build_annotated_stmt(pair),
         Rule::standard_def => build_standard_def(pair),
@@ -61,6 +62,7 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, ParseError> {
         Rule::match_stmt => build_match_stmt(pair),
         // Unterminated productions → Incomplete AST nodes
         Rule::unterminated_block => Ok(Statement::Incomplete { kind: IncompleteKind::Block }),
+        Rule::unterminated_declare_block => Ok(Statement::Incomplete { kind: IncompleteKind::DeclareBlock }),
         Rule::unterminated_match => Ok(Statement::Incomplete { kind: IncompleteKind::Match }),
         Rule::unterminated_entry_type_def => Ok(Statement::Incomplete { kind: IncompleteKind::EntryTypeDef }),
         Rule::unterminated_standard_def => Ok(Statement::Incomplete { kind: IncompleteKind::StandardDef }),
@@ -83,7 +85,7 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, ParseError> {
 fn build_let_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
     let mut inner = pair.into_inner().peekable();
 
-    let visibility = if inner.peek().map(|p| p.as_rule()) == Some(Rule::pub_modifier) {
+    let visibility = if inner.peek().map(|p| p.as_rule()) == Some(Rule::visibility) {
         Some(build_visibility(inner.next().unwrap()))
     } else {
         None
@@ -172,7 +174,7 @@ fn build_assign_target(pair: Pair<Rule>) -> Result<AssignTarget, ParseError> {
 fn build_fn_decl(pair: Pair<Rule>) -> Result<Statement, ParseError> {
     let mut inner = pair.into_inner().peekable();
 
-    let visibility = if inner.peek().map(|p| p.as_rule()) == Some(Rule::pub_modifier) {
+    let visibility = if inner.peek().map(|p| p.as_rule()) == Some(Rule::visibility) {
         Some(build_visibility(inner.next().unwrap()))
     } else {
         None
@@ -536,7 +538,7 @@ fn build_primary_type(pair: Pair<Rule>) -> Result<TypeAnnotation, ParseError> {
 fn build_type_alias(pair: Pair<Rule>) -> Result<Statement, ParseError> {
     let mut inner = pair.into_inner().peekable();
 
-    let visibility = if inner.peek().map(|p| p.as_rule()) == Some(Rule::pub_modifier) {
+    let visibility = if inner.peek().map(|p| p.as_rule()) == Some(Rule::visibility) {
         Some(build_visibility(inner.next().unwrap()))
     } else {
         None
@@ -548,39 +550,79 @@ fn build_type_alias(pair: Pair<Rule>) -> Result<Statement, ParseError> {
 }
 
 fn build_visibility(pair: Pair<Rule>) -> Visibility {
-    let inner: Vec<_> = pair.into_inner().collect();
-    if inner.is_empty() {
-        Visibility::Public
-    } else {
-        Visibility::PubScope(inner[0].as_str().to_string())
+    match pair.as_str() {
+        "priv" => Visibility::Priv,
+        "pkg"  => Visibility::Pkg,
+        "pub"  => Visibility::Pub,
+        other  => panic!("unexpected visibility keyword: {}", other),
     }
 }
 
 fn build_use_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
-    let module_path = pair.into_inner().next().unwrap();
-    let path: Vec<String> = module_path
+    let mut inner = pair.into_inner().peekable();
+    let path_pair = inner.next().unwrap(); // module_path
+    let module_path: Vec<String> = path_pair
         .into_inner()
         .map(|p| p.as_str().to_string())
         .collect();
-    Ok(Statement::Use { path })
+
+    let mut alias = None;
+    let mut selective = None;
+
+    if let Some(next) = inner.peek() {
+        if next.as_rule() == Rule::selective_import_list {
+            let list_pair = inner.next().unwrap();
+            selective = Some(
+                list_pair
+                    .into_inner()
+                    .map(|si| {
+                        let mut parts = si.into_inner();
+                        let name = parts.next().unwrap().as_str().to_string();
+                        let alias = parts.next().map(|p| p.as_str().to_string());
+                        SelectiveImport { name, alias }
+                    })
+                    .collect(),
+            );
+        } else if next.as_rule() == Rule::identifier {
+            alias = Some(inner.next().unwrap().as_str().to_string());
+        }
+    }
+
+    Ok(Statement::Use { module_path, alias, selective })
 }
 
-fn build_mod_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
-    let mut inner = pair.into_inner().peekable();
+fn build_declare_block(pair: Pair<Rule>) -> Result<Statement, ParseError> {
+    let mut body = Vec::new();
+    for inner in pair.into_inner() {
+        body.push(build_statement(inner)?);
+    }
+    Ok(Statement::DeclareBlock { body })
+}
 
-    let visibility = if inner.peek().map(|p| p.as_rule()) == Some(Rule::pub_modifier) {
-        Some(build_visibility(inner.next().unwrap()))
-    } else {
-        None
+fn build_bootstrap_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
+    let inner = pair.into_inner().next().unwrap();
+    let source = match inner.as_rule() {
+        Rule::string_literal => {
+            let s = inner.into_inner().next().unwrap().as_str().to_string();
+            if s.starts_with("https://") {
+                BootstrapSource::Url(s)
+            } else {
+                BootstrapSource::Path(s)
+            }
+        }
+        Rule::inline_json_object => {
+            let content = inner.into_inner().next().unwrap().as_str().to_string();
+            BootstrapSource::Inline(content)
+        }
+        rule => {
+            let span = inner.as_span();
+            return Err(ParseError::new(
+                span.start(), span.end(),
+                format!("unexpected bootstrap source rule: {:?}", rule),
+            ));
+        }
     };
-
-    let name = inner.next().unwrap().as_str().to_string();
-    let body = if let Some(block_pair) = inner.next() {
-        Some(Box::new(build_block(block_pair)?))
-    } else {
-        None
-    };
-    Ok(Statement::ModDecl { name, body, visibility })
+    Ok(Statement::Bootstrap { source })
 }
 
 fn build_annotated_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {

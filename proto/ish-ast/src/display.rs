@@ -137,16 +137,40 @@ impl<'a> fmt::Display for StmtDisplay<'a> {
                 indent(f, d)?;
                 write!(f, "type {} = ...", name)
             }
-            Statement::Use { path } => {
+            Statement::Use { module_path, alias, selective } => {
                 indent(f, d)?;
-                write!(f, "use {}", path.join("::"))
+                write!(f, "use {}", module_path.join("/"))?;
+                if let Some(a) = alias {
+                    write!(f, " as {}", a)?;
+                }
+                if let Some(sel) = selective {
+                    write!(f, " {{")?;
+                    for (i, s) in sel.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{}", s.name)?;
+                        if let Some(a) = &s.alias {
+                            write!(f, " as {}", a)?;
+                        }
+                    }
+                    write!(f, "}}")?;
+                }
+                Ok(())
             }
-            Statement::ModDecl { name, body, .. } => {
+            Statement::DeclareBlock { body } => {
                 indent(f, d)?;
-                if let Some(b) = body {
-                    write!(f, "mod {} {}", name, StmtDisplay(b, d))
-                } else {
-                    write!(f, "mod {}", name)
+                writeln!(f, "declare {{")?;
+                for s in body {
+                    writeln!(f, "{}", StmtDisplay(s, d + 1))?;
+                }
+                indent(f, d)?;
+                write!(f, "}}")
+            }
+            Statement::Bootstrap { source } => {
+                indent(f, d)?;
+                match source {
+                    BootstrapSource::Path(p) => write!(f, "bootstrap '{}'", p),
+                    BootstrapSource::Url(u) => write!(f, "bootstrap '{}'", u),
+                    BootstrapSource::Inline(json) => write!(f, "bootstrap {{{}}}", json),
                 }
             }
             Statement::ShellCommand { command, args, background, .. } => {

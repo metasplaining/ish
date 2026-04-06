@@ -3,7 +3,7 @@ title: "Architecture: ish-ast"
 category: architecture
 audience: [all]
 status: draft
-last-verified: 2026-03-14
+last-verified: 2026-04-05
 depends-on: [docs/architecture/overview.md, docs/spec/syntax.md]
 ---
 
@@ -49,10 +49,47 @@ pub enum Statement {
     Return { value },
     ExpressionStmt(Expression),
     FunctionDecl { name, params, return_type, body },
+    TypeAlias { name, definition, visibility: Option<Visibility> },
+    Use {
+        module_path: Vec<String>,
+        alias: Option<String>,
+        selective: Option<Vec<SelectiveImport>>,
+    },
+    DeclareBlock {
+        body: Vec<Statement>,
+    },
+    Bootstrap {
+        source: BootstrapSource,
+    },
     Throw { value: Expression },
     TryCatch { body, catches: Vec<CatchClause>, finally },
     WithBlock { resources: Vec<(String, Expression)>, body },
     Defer { body },
+}
+
+pub struct SelectiveImport {
+    pub name: String,
+    pub alias: Option<String>,
+}
+
+pub enum BootstrapSource {
+    Path(String),
+    Url(String),
+    Inline(String),
+}
+
+pub enum Visibility {
+    Priv,   // priv — current module only
+    Pkg,    // pkg — all project members (default when omitted)
+    Pub,    // pub — external dependents
+}
+
+// None in Option<Visibility> means default visibility (pkg).
+// Priv and Pub are only present when explicitly written in source.
+
+pub enum IncompleteKind {
+    // ... existing variants ...
+    DeclareBlock,   // unterminated `declare {`
 }
 
 pub struct CatchClause {
