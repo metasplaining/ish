@@ -2,8 +2,8 @@
 title: "Proposal A-2: Module Core — Execution and Tooling"
 category: proposal
 audience: [ai-dev, human-dev]
-status: proposal
-last-verified: 2026-04-05
+status: accepted
+last-verified: 2026-04-06
 depends-on: [docs/project/proposals/module-system-core-a1.md, docs/project/proposals/module-system-core.md, docs/project/proposals/module-system.md, docs/spec/modules.md, GLOSSARY.md]
 ---
 

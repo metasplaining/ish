@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::value::{Value, new_object};
 
 /// Type-safe error code enum identifying the category of a RuntimeError.
-/// Each variant corresponds to an error code (E001–E013) in the error catalog.
+/// Each variant corresponds to an error code (E001–E024) in the error catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     UnhandledThrow,        // E001
@@ -22,6 +22,15 @@ pub enum ErrorCode {
     SpawnUnyielding,       // E013
     AwaitNonFuture,        // E014
     UnyieldingViolation,   // E015
+    ModuleNotFound,                     // E016
+    ModuleCycle,                        // E017
+    ModuleScriptNotImportable,          // E018
+    ModulePathConflict,                 // E019
+    ModuleDeclareBlockCommand,          // E020
+    ModuleBootstrapInProject,           // E021
+    InterfaceSymbolNotInImplementation, // E022
+    InterfaceSymbolNotInInterface,      // E023
+    InterfaceSymbolMismatch,            // E024
 }
 
 impl ErrorCode {
@@ -42,6 +51,15 @@ impl ErrorCode {
             ErrorCode::SpawnUnyielding => "E013",
             ErrorCode::AwaitNonFuture => "E014",
             ErrorCode::UnyieldingViolation => "E015",
+            ErrorCode::ModuleNotFound => "E016",
+            ErrorCode::ModuleCycle => "E017",
+            ErrorCode::ModuleScriptNotImportable => "E018",
+            ErrorCode::ModulePathConflict => "E019",
+            ErrorCode::ModuleDeclareBlockCommand => "E020",
+            ErrorCode::ModuleBootstrapInProject => "E021",
+            ErrorCode::InterfaceSymbolNotInImplementation => "E022",
+            ErrorCode::InterfaceSymbolNotInInterface => "E023",
+            ErrorCode::InterfaceSymbolMismatch => "E024",
         }
     }
 }

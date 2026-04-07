@@ -3,6 +3,7 @@ use std::rc::Rc;
 use ish_vm::interpreter::IshVm;
 use ish_vm::builtins::BuiltinConfig;
 use ish_vm::value::Value;
+use ish_vm::{module_loader, access_control};
 use reedline::{
     DefaultHinter, ExternalPrinter, FileBackedHistory, Reedline, Signal,
     DefaultPrompt, DefaultPromptSegment,
@@ -128,7 +129,13 @@ pub fn run_interactive(no_history: bool) {
             let config = BuiltinConfig {
                 output_sender: Some(output_sender),
             };
-            let mut vm = Rc::new(RefCell::new(IshVm::with_config(&config)));
+            let vm = Rc::new(RefCell::new(IshVm::with_config(&config)));
+            {
+                let start = std::env::current_dir().unwrap_or_default();
+                let project_root = module_loader::find_project_root(&start);
+                let src_root = project_root.as_ref().map(|r| r.join("src"));
+                vm.borrow_mut().project_context = access_control::ProjectContext { project_root, src_root };
+            }
             ish_stdlib::load_all(&vm).await;
 
             // Receive and execute programs from the shell thread
@@ -192,6 +199,14 @@ pub async fn run_file(filename: &str) {
 
     // Non-interactive: single thread, no ExternalPrinter, direct stdout (R6.5)
     let vm = Rc::new(RefCell::new(IshVm::new()));
+    {
+        let start = std::path::Path::new(filename).parent().unwrap_or(std::path::Path::new("."));
+        let project_root = module_loader::find_project_root(start);
+        let src_root = project_root.as_ref().map(|r| r.join("src"));
+        vm.borrow_mut().project_context = access_control::ProjectContext { project_root, src_root };
+        let abs_path = std::fs::canonicalize(filename).unwrap_or_else(|_| std::path::PathBuf::from(filename));
+        vm.borrow_mut().initial_file = Some(abs_path);
+    }
 
     let local = LocalSet::new();
     local.run_until(ish_stdlib::load_all(&vm)).await;
@@ -220,6 +235,12 @@ pub async fn run_inline(code: &str) {
 
     // Non-interactive: single thread, no ExternalPrinter, direct stdout (R6.5)
     let vm = Rc::new(RefCell::new(IshVm::new()));
+    {
+        let start = std::env::current_dir().unwrap_or_default();
+        let project_root = module_loader::find_project_root(&start);
+        let src_root = project_root.as_ref().map(|r| r.join("src"));
+        vm.borrow_mut().project_context = access_control::ProjectContext { project_root, src_root };
+    }
 
     let local = LocalSet::new();
     local.run_until(ish_stdlib::load_all(&vm)).await;

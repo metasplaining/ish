@@ -10,3 +10,6 @@ pub mod builtins;
 pub mod reflection;
 pub mod ledger;
 pub mod analyzer;
+pub mod module_loader;
+pub mod access_control;
+pub mod interface_checker;

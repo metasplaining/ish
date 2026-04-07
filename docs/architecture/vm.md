@@ -3,7 +3,7 @@ title: "Architecture: ish-vm"
 category: architecture
 audience: [all]
 status: draft
-last-verified: 2026-04-02
+last-verified: 2026-04-06
 depends-on: [docs/architecture/overview.md, docs/architecture/ast.md, docs/architecture/runtime.md, docs/spec/concurrency.md]
 ---
 
@@ -93,9 +93,91 @@ The analyzer walks the function body AST looking for yielding nodes:
 Functions declared `async` are immediately classified as yielding without body analysis. The analyzer does not recurse into nested `FunctionDecl` or `Lambda` bodies — those are classified independently when they are declared.
 
 **Known limitations:**
-- No forward references: all functions must be declared before they are called.
-- No call cycles: mutually recursive functions are not supported.
+- No forward references: all functions must be declared before they are called (except within `declare { }` blocks — see Module Loading below).
 - Only direct `Identifier` calls are analyzed; indirect calls (through variables, higher-order functions) are not checked.
+
+**Declare block yielding propagation (D22):**
+
+When analyzing a `declare { }` block, the analyzer propagates yielding through mutual recursion:
+
+1. Register all function names in the block as a mutual-recursion group before analyzing any bodies.
+2. Determine yielding for each function based on its own operations first.
+3. If any function in the group calls another function in the group, propagate yielding transitively.
+4. If a cycle is detected within the group and at least one function is yielding (by any criterion), all functions in the cycle become yielding.
+5. If a cycle is detected and no function has any yielding criterion other than the cyclic call, all functions in the cycle are unyielding.
+
+### Module Loading
+
+The module loading subsystem handles `use` directive resolution, project discovery, access control, and interface file checking. Per D21, the logic is split across three dedicated modules rather than accumulating in `interpreter.rs`.
+
+**New modules:**
+
+| Module | Purpose |
+|--------|---------|
+| `module_loader.rs` | Filesystem and project-structure concerns: path resolution, cycle detection, project root discovery |
+| `access_control.rs` | Visibility enforcement (`priv`/`pkg`/`pub`) and project membership checks |
+| `interface_checker.rs` | Interface file (`.ishi`) consistency checking |
+
+**Project root discovery:**
+
+At interpreter startup (file execution or REPL mode), `module_loader::find_project_root` walks up the directory tree from the starting location looking for `project.json`. The result is stored in a `ProjectContext`:
+
+```rust
+pub struct ProjectContext {
+    pub project_root: Option<PathBuf>,  // None = installation default
+    pub src_root: Option<PathBuf>,      // project_root/src/
+}
+```
+
+The `ProjectContext` flows through the interpreter and is available to all module-loading operations.
+
+**`use` path resolution:**
+
+`module_loader::resolve_module_path` maps a module path (from a `use` statement) to a `.ish` file under `src/`. It checks two candidates: `src/a/b/c.ish` and `src/a/b/c/index.ish`. If both exist, it returns E019 (`ModulePathConflict`). If neither exists, it returns E016 (`ModuleNotFound`). Files without `.ish` extension are never considered.
+
+**`index.ish` special case:**
+
+`module_loader::derive_module_path` strips the `src/` prefix and `.ish` extension. If the filename is `index`, the parent directory name is used instead — `src/net/index.ish` maps to module path `net`, not `net/index`.
+
+**Cycle detection:**
+
+The interpreter maintains a loading stack of module paths currently being loaded. Before loading a new module, `module_loader::check_cycle` checks whether the candidate path already appears on the stack. If so, the interpreter returns E017 (`ModuleCycle`) listing the full cycle path.
+
+**Implicit declare wrapping:**
+
+When `use` loads a file, the interpreter wraps its contents in an implicit `declare { }` block. If any statement in the file is not a declaration (function definition, type definition, etc.), the interpreter returns E018 (`ModuleScriptNotImportable`). This ensures that only pure-declaration files are importable.
+
+**Access control:**
+
+`access_control::check_access` enforces the three visibility levels:
+
+- `priv`: caller must be in the same file (same module).
+- `pkg`: caller must be physically located under the item's project root.
+- `pub`: always allowed.
+
+Inline callers (`None` file path — REPL input, `ish -e` invocation) are denied `priv` and `pkg` access. The check is called on selective imports (`use foo/bar { Name }`) to verify the caller has access to each imported symbol.
+
+**Interface file checking:**
+
+`interface_checker::check_interface` runs after a module is loaded but before its bindings are made available. It looks for a sibling `.ishi` file and, if found, compares the interface declarations against the module's `pub` declarations:
+
+- E022 (`InterfaceSymbolNotInImplementation`): symbol in `.ishi` but absent from the `.ish` file.
+- E023 (`InterfaceSymbolNotInInterface`): `pub` symbol in `.ish` but absent from `.ishi`.
+- E024 (`InterfaceSymbolMismatch`): symbol in both but signatures differ.
+
+If no `.ishi` file exists, no enforcement occurs.
+
+**`DeclareBlock` evaluation:**
+
+1. Pre-register all function and type names in the block (enabling mutual forward references).
+2. Validate that all statements are declarations. E020 (`ModuleDeclareBlockCommand`) on violation.
+3. Run the analyzer's yielding propagation (D22) for mutual recursion.
+4. Evaluate declarations in order.
+5. Merge the resulting bindings into the parent environment.
+
+**`Bootstrap` evaluation (D20):**
+
+Checks that the caller file is not under any `project.json` in its hierarchy (using `module_loader::find_project_root`). If it is, returns E021 (`ModuleBootstrapInProject`). Config parsing, application, and URL fetching are deferred.
 
 ### Execution Variants
 

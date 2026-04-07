@@ -3,7 +3,7 @@ title: Error Catalog
 category: project
 audience: [all]
 status: draft
-last-verified: 2026-03-19
+last-verified: 2026-04-06
 depends-on: [docs/INDEX.md, docs/spec/errors.md]
 ---
 
@@ -40,6 +40,15 @@ Domain types are structural ish types (not entry types) defined in [errors.md](.
 | E013 | `SpawnUnyielding` | `ConcurrencyError` | Spawn type mismatch — `spawn` applied to a call to an explicitly unyielding function | `interpreter.rs` (Expression::Spawn) |
 | E014 | `AwaitNonFuture` | `TypeError` | Await type mismatch — `await` applied to a non-future value | `interpreter.rs` (Expression::Await, non-Future value) |
 | E015 | `UnyieldingViolation` | `ConcurrencyError` | Unyielding annotation violation — function declared `@[unyielding]` contains yielding operations | `interpreter.rs` (Statement::FunctionDecl, @[unyielding] annotation check) |
+| E016 | `ModuleNotFound` | `CodedError` | `use` path has no matching `.ish` file | `module_loader::resolve_module_path` |
+| E017 | `ModuleCycle` | `CodedError` | Circular `use` dependency detected | `interpreter.rs` — Use evaluation |
+| E018 | `ModuleScriptNotImportable` | `CodedError` | File imported via `use` contains top-level commands | `interpreter.rs` — Use evaluation |
+| E019 | `ModulePathConflict` | `CodedError` | Both `foo.ish` and `foo/index.ish` exist | `module_loader::resolve_module_path` |
+| E020 | `ModuleDeclareBlockCommand` | `CodedError` | `declare { }` block contains a non-declaration statement | `interpreter.rs` — DeclareBlock evaluation |
+| E021 | `ModuleBootstrapInProject` | `CodedError` | `bootstrap` used inside a project hierarchy | `interpreter.rs` — Bootstrap evaluation |
+| E022 | `InterfaceSymbolNotInImplementation` | `CodedError` | `.ishi` declares a symbol absent from the `.ish` file | `interface_checker.rs` |
+| E023 | `InterfaceSymbolNotInInterface` | `CodedError` | `.ish` has a `pub` symbol not declared in `.ishi` | `interface_checker.rs` |
+| E024 | `InterfaceSymbolMismatch` | `CodedError` | Symbol present in both `.ishi` and `.ish` with mismatched signatures | `interface_checker.rs` |
 
 ---
 

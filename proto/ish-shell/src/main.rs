@@ -1,4 +1,5 @@
 mod highlight;
+mod interface_cmd;
 mod repl;
 mod validate;
 
@@ -13,6 +14,17 @@ fn main() {
         .filter(|a| a.as_str() != "-c")
         .map(|s| s.as_str())
         .collect();
+
+    if positional.first() == Some(&"interface") {
+        if positional.get(1) == Some(&"freeze") {
+            let target = positional.get(2).map(|s| s.to_string());
+            let cwd = std::env::current_dir().expect("cannot determine cwd");
+            interface_cmd::freeze(target, &cwd);
+            return;
+        }
+        eprintln!("unknown interface subcommand: {:?}", positional.get(1));
+        std::process::exit(1);
+    }
 
     if let Some(idx) = args.iter().position(|a| a == "-c") {
         // Inline execution: ish -c 'code'

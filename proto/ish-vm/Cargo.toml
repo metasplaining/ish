@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ish-ast = { path = "../ish-ast" }
+ish-parser = { path = "../ish-parser" }
 ish-runtime = { path = "../ish-runtime" }
 gc = { version = "0.5", features = ["derive"] }
 serde_json = "1"

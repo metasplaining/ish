@@ -67,6 +67,11 @@ impl Environment {
         }
         Err(RuntimeError::system_error(format!("undefined variable: {}", name), ErrorCode::UndefinedVariable))
     }
+
+    /// Return all bindings in the current scope (not walking parent chain).
+    pub fn all_bindings(&self) -> HashMap<String, Value> {
+        self.inner.borrow().vars.clone()
+    }
 }
 
 impl Default for Environment {

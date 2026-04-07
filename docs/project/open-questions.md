@@ -114,6 +114,10 @@ See also [docs/spec/modules.md — Open Questions](../spec/modules.md#open-quest
 - [ ] **Default visibility for different declarations.** All `pub(self)`?
 - [ ] **Visibility of nested items.** Same options as module-level?
 
+### Interface Files
+
+- [ ] **Interface freeze must capture fully analyzed signatures.** When `ish interface freeze` generates a `.ishi` file, the signatures must reflect the fully analyzed form of each declaration — for example, a function that is implicitly yielding must be written as explicitly yielding in the `.ishi` file. The analysis requirements and the format for encoding analyzed attributes in `.ishi` are not yet specified.
+
 ### Import System
 
 - [ ] **`use` directive syntax.** Style, glob imports, selective imports, renaming.

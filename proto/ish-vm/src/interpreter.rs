@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -13,6 +14,7 @@ use crate::error::{ErrorCode, RuntimeError};
 use crate::value::*;
 use crate::builtins;
 use crate::ledger::LedgerState;
+use crate::{module_loader, access_control, interface_checker};
 
 /// Signal for control flow: normal completion, return, throw, or break.
 enum ControlFlow {
@@ -33,6 +35,10 @@ pub struct TaskContext {
     /// Stack of (is_async, fn_name) for nested function calls.
     /// Used by async_annotation audit to detect non-async functions performing async ops.
     async_stack: Vec<(bool, String)>,
+    /// Stack of module paths currently being loaded (for cycle detection).
+    pub loading_stack: Vec<Vec<String>>,
+    /// Path of the file currently being executed (for access control and bootstrap checks).
+    pub current_file: Option<PathBuf>,
 }
 
 impl TaskContext {
@@ -40,6 +46,8 @@ impl TaskContext {
         TaskContext {
             defer_stack: Vec::new(),
             async_stack: Vec::new(),
+            loading_stack: Vec::new(),
+            current_file: None,
         }
     }
 
@@ -109,6 +117,10 @@ pub struct IshVm {
     /// Assurance ledger runtime state: standard scope stack, entry store,
     /// and built-in registries.
     pub ledger: LedgerState,
+    /// Project context for module loading and access control.
+    pub project_context: access_control::ProjectContext,
+    /// The initial file being executed (set before `run()` for file-based execution).
+    pub initial_file: Option<PathBuf>,
 }
 
 impl IshVm {
@@ -119,6 +131,11 @@ impl IshVm {
         IshVm {
             global_env: env,
             ledger: LedgerState::new(),
+            project_context: access_control::ProjectContext {
+                project_root: None,
+                src_root: None,
+            },
+            initial_file: None,
         }
     }
 
@@ -130,6 +147,11 @@ impl IshVm {
         IshVm {
             global_env: env,
             ledger: LedgerState::new(),
+            project_context: access_control::ProjectContext {
+                project_root: None,
+                src_root: None,
+            },
+            initial_file: None,
         }
     }
 
@@ -139,6 +161,11 @@ impl IshVm {
         IshVm {
             global_env: self.global_env.clone(),
             ledger: self.ledger.clone(),
+            project_context: access_control::ProjectContext {
+                project_root: self.project_context.project_root.clone(),
+                src_root: self.project_context.src_root.clone(),
+            },
+            initial_file: self.initial_file.clone(),
         }
     }
 
@@ -156,6 +183,7 @@ impl IshVm {
     /// Execute a full program.
     pub async fn run(vm: &Rc<RefCell<IshVm>>, program: &Program) -> Result<Value, RuntimeError> {
         let mut task = TaskContext::new();
+        task.current_file = vm.borrow().initial_file.clone();
         let mut yc = YieldContext::new();
         let mut last = Value::Null;
         let env = vm.borrow().global_env.clone();
@@ -708,19 +736,16 @@ impl IshVm {
                 Ok(ControlFlow::None)
             }
 
-            Statement::Use { .. } => {
-                // Module imports are resolved at load time, not runtime
-                Ok(ControlFlow::None)
+            Statement::Use { module_path, alias, selective } => {
+                Self::eval_use(vm, task, yc, env, module_path, alias.as_deref(), selective.as_deref()).await
             }
 
-            Statement::DeclareBlock { .. } => {
-                // Execution deferred to A-2
-                Ok(ControlFlow::None)
+            Statement::DeclareBlock { body } => {
+                Self::eval_declare_block_yielding(vm, task, yc, env, body).await
             }
 
             Statement::Bootstrap { .. } => {
-                // Execution deferred to A-2
-                Ok(ControlFlow::None)
+                Self::eval_bootstrap(vm, task)
             }
 
             Statement::ShellCommand { command, args, pipes, redirections, background: _ } => {
@@ -1345,6 +1370,283 @@ impl IshVm {
             }
         }
         }) // end Box::pin(async move { })
+    }
+
+    // ── Module system: Use, DeclareBlock, Bootstrap ─────────────────────────
+
+    /// Evaluate a `use` statement (yielding path).
+    async fn eval_use(
+        vm: &Rc<RefCell<IshVm>>,
+        task: &mut TaskContext,
+        yc: &mut YieldContext,
+        env: &Environment,
+        module_path: &[String],
+        alias: Option<&str>,
+        selective: Option<&[SelectiveImport]>,
+    ) -> Result<ControlFlow, RuntimeError> {
+        // Step 1: Check if external path (first segment contains '.').
+        if module_path.first().map_or(false, |s| s.contains('.')) {
+            return Ok(ControlFlow::None); // External paths deferred.
+        }
+
+        // Step 2: Get src_root from project context.
+        let src_root = {
+            let vm_ref = vm.borrow();
+            vm_ref.project_context.src_root.clone()
+        };
+        let src_root = match src_root {
+            Some(r) => r,
+            None => return Err(RuntimeError::system_error(
+                "use statement requires a project context (src_root not set)",
+                ErrorCode::ModuleNotFound,
+            )),
+        };
+
+        // Step 3: Resolve module path to a file.
+        let file_path = module_loader::resolve_module_path(module_path, &src_root)?;
+
+        // Step 4: Cycle detection.
+        if module_loader::check_cycle(&task.loading_stack, module_path) {
+            let cycle_str = task.loading_stack.iter()
+                .map(|p| p.join("/"))
+                .chain(std::iter::once(module_path.join("/")))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            return Err(RuntimeError::system_error(
+                format!("Circular module dependency detected: {}", cycle_str),
+                ErrorCode::ModuleCycle,
+            ));
+        }
+
+        // Step 5: Read and parse the file.
+        let source = std::fs::read_to_string(&file_path).map_err(|e| {
+            RuntimeError::system_error(
+                format!("Failed to read module file {:?}: {}", file_path, e),
+                ErrorCode::ModuleNotFound,
+            )
+        })?;
+
+        let program = ish_parser::parse(&source).map_err(|errors| {
+            RuntimeError::system_error(
+                format!("Parse error in module file {:?}: {:?}", file_path, errors),
+                ErrorCode::ModuleNotFound,
+            )
+        })?;
+
+        // Step 6: Check declarations-only (implicit declare wrapping).
+        for stmt in &program.statements {
+            if !Self::is_declaration(stmt) {
+                return Err(RuntimeError::system_error(
+                    format!(
+                        "File {:?} contains top-level commands and cannot be imported via `use`. Only files with function and type declarations are importable.",
+                        file_path
+                    ),
+                    ErrorCode::ModuleScriptNotImportable,
+                ));
+            }
+        }
+
+        // Step 7: Interface check.
+        let interface_errors = interface_checker::check_interface(&file_path, &program.statements);
+        if let Some(first_err) = interface_errors.into_iter().next() {
+            return Err(RuntimeError::system_error(
+                first_err.message,
+                first_err.code,
+            ));
+        }
+
+        // Step 8: Evaluate module in a child environment.
+        let saved_file = task.current_file.take();
+        task.loading_stack.push(module_path.to_vec());
+        task.current_file = Some(file_path.clone());
+
+        let module_env = env.child();
+        for stmt in &program.statements {
+            // Pre-register names for forward references within the module.
+            match stmt {
+                Statement::FunctionDecl { name, .. } => {
+                    module_env.define(name.clone(), Value::Null);
+                }
+                Statement::TypeAlias { name, .. } => {
+                    module_env.define(name.clone(), Value::Null);
+                }
+                _ => {}
+            }
+        }
+        for stmt in &program.statements {
+            Self::exec_statement_yielding(vm, task, yc, stmt, &module_env).await?;
+        }
+
+        task.loading_stack.pop();
+        task.current_file = saved_file;
+
+        // Step 9: Bind namespace into caller's environment.
+        let module_name = alias.unwrap_or_else(|| module_path.last().map(|s| s.as_str()).unwrap_or(""));
+
+        if let Some(selective_imports) = selective {
+            // Selective import: bind each name into caller env.
+            let project_root = vm.borrow().project_context.project_root.clone();
+            for sel in selective_imports {
+                let value = module_env.get(&sel.name).map_err(|_| {
+                    RuntimeError::system_error(
+                        format!("Symbol '{}' not found in module '{}'", sel.name, module_path.join("/")),
+                        ErrorCode::ModuleNotFound,
+                    )
+                })?;
+                // Access control check on selective imports.
+                let item_visibility = Self::get_symbol_visibility(&program.statements, &sel.name);
+                if let Some(vis) = item_visibility {
+                    let check_result = access_control::check_access(
+                        &vis,
+                        Some(&file_path),
+                        project_root.as_deref(),
+                        task.current_file.as_deref(),
+                        project_root.as_deref(),
+                    );
+                    if let Err(access_err) = check_result {
+                        return Err(RuntimeError::system_error(
+                            format!("Access denied for '{}': {}", sel.name, access_err),
+                            ErrorCode::ModuleNotFound,
+                        ));
+                    }
+                }
+                let bind_name = sel.alias.as_ref().unwrap_or(&sel.name);
+                env.define(bind_name.clone(), value);
+            }
+        } else {
+            // Qualified or aliased import: bind module as an object.
+            let bindings = module_env.all_bindings();
+            let mut obj_map = HashMap::new();
+            for (k, v) in bindings {
+                obj_map.insert(k, v);
+            }
+            env.define(module_name.to_string(), new_object(obj_map));
+        }
+
+        Ok(ControlFlow::None)
+    }
+
+    /// Evaluate a `declare { }` block (yielding path).
+    async fn eval_declare_block_yielding(
+        vm: &Rc<RefCell<IshVm>>,
+        task: &mut TaskContext,
+        yc: &mut YieldContext,
+        env: &Environment,
+        body: &[Statement],
+    ) -> Result<ControlFlow, RuntimeError> {
+        // Step 1: Validate declarations-only.
+        for stmt in body {
+            if !Self::is_declaration(stmt) {
+                return Err(RuntimeError::system_error(
+                    "declare { } block contains a non-declaration statement. Only function definitions and type aliases are allowed inside declare { }.",
+                    ErrorCode::ModuleDeclareBlockCommand,
+                ));
+            }
+        }
+
+        // Step 2: Pre-register all names for forward references.
+        for stmt in body {
+            match stmt {
+                Statement::FunctionDecl { name, .. } => {
+                    env.define(name.clone(), Value::Null);
+                }
+                Statement::TypeAlias { name, .. } => {
+                    env.define(name.clone(), Value::Null);
+                }
+                _ => {}
+            }
+        }
+
+        // Step 3: Evaluate each declaration in order.
+        // The pre-registration enables mutual forward references.
+        for stmt in body {
+            Self::exec_statement_yielding(vm, task, yc, stmt, env).await?;
+        }
+
+        Ok(ControlFlow::None)
+    }
+
+    /// Evaluate a `declare { }` block (unyielding path).
+    fn eval_declare_block_unyielding(
+        vm: &Rc<RefCell<IshVm>>,
+        task: &mut TaskContext,
+        env: &Environment,
+        body: &[Statement],
+    ) -> Result<ControlFlow, RuntimeError> {
+        // Step 1: Validate declarations-only.
+        for stmt in body {
+            if !Self::is_declaration(stmt) {
+                return Err(RuntimeError::system_error(
+                    "declare { } block contains a non-declaration statement. Only function definitions and type aliases are allowed inside declare { }.",
+                    ErrorCode::ModuleDeclareBlockCommand,
+                ));
+            }
+        }
+
+        // Step 2: Pre-register all names for forward references.
+        for stmt in body {
+            match stmt {
+                Statement::FunctionDecl { name, .. } => {
+                    env.define(name.clone(), Value::Null);
+                }
+                Statement::TypeAlias { name, .. } => {
+                    env.define(name.clone(), Value::Null);
+                }
+                _ => {}
+            }
+        }
+
+        // Step 3: Evaluate each declaration in order.
+        for stmt in body {
+            Self::exec_statement_unyielding(vm, task, stmt, env)?;
+        }
+
+        Ok(ControlFlow::None)
+    }
+
+    /// Evaluate a `bootstrap` statement. Checks project membership (E021).
+    /// Config parsing is deferred (D20).
+    fn eval_bootstrap(
+        vm: &Rc<RefCell<IshVm>>,
+        task: &TaskContext,
+    ) -> Result<ControlFlow, RuntimeError> {
+        if let Some(ref current_file) = task.current_file {
+            if let Some(parent) = current_file.parent() {
+                if module_loader::find_project_root(parent).is_some() {
+                    return Err(RuntimeError::system_error(
+                        format!(
+                            "bootstrap cannot be used inside a project hierarchy. File {:?} is under a project.json directory.",
+                            current_file
+                        ),
+                        ErrorCode::ModuleBootstrapInProject,
+                    ));
+                }
+            }
+        }
+        // Config parsing deferred (D20). Just return success for standalone scripts.
+        let _ = vm; // suppress unused warning
+        Ok(ControlFlow::None)
+    }
+
+    /// Check whether a statement is a declaration (FunctionDecl, TypeAlias, Use, DeclareBlock, Bootstrap).
+    fn is_declaration(stmt: &Statement) -> bool {
+        matches!(stmt, Statement::FunctionDecl { .. } | Statement::TypeAlias { .. } | Statement::Use { .. } | Statement::DeclareBlock { .. } | Statement::Bootstrap { .. })
+    }
+
+    /// Get the visibility of a named symbol from a list of statements.
+    fn get_symbol_visibility(stmts: &[Statement], name: &str) -> Option<Visibility> {
+        for stmt in stmts {
+            match stmt {
+                Statement::FunctionDecl { name: fn_name, visibility, .. } if fn_name == name => {
+                    return Some(visibility.clone().unwrap_or(Visibility::Pkg));
+                }
+                Statement::TypeAlias { name: type_name, visibility, .. } if type_name == name => {
+                    return Some(visibility.clone().unwrap_or(Visibility::Pkg));
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     // ── Shell command execution ─────────────────────────────────────────────
@@ -2209,9 +2511,13 @@ impl IshVm {
             }
 
             Statement::TypeAlias { .. } => Ok(ControlFlow::None),
-            Statement::Use { .. } => Ok(ControlFlow::None),
-            Statement::DeclareBlock { .. } => Ok(ControlFlow::None),
-            Statement::Bootstrap { .. } => Ok(ControlFlow::None),
+            Statement::Use { .. } => Ok(ControlFlow::None), // modules loaded via yielding path only
+            Statement::DeclareBlock { body } => {
+                Self::eval_declare_block_unyielding(vm, task, env, body)
+            }
+            Statement::Bootstrap { .. } => {
+                Self::eval_bootstrap(vm, task)
+            }
 
             Statement::ShellCommand { .. } => {
                 Err(RuntimeError::system_error(
