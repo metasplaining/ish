@@ -42,6 +42,7 @@ Structured proposals generated from prompt files using the `/propose` skill. Eac
 | 2026-04-05 | Module System — Core A-1: Language Representation | accepted | [module-system-core-a1.md](module-system-core-a1.md) |
 | 2026-04-05 | Module System — Core A-2: Execution and Tooling | proposal | [module-system-core-a2.md](module-system-core-a2.md) |
 | 2026-04-05 | Module System — Package Management | proposal | [module-system-packages.md](module-system-packages.md) |
+| 2026-04-06 | Prototype Code Quality Refactoring | accepted | [refactoring-prototype.md](refactoring-prototype.md) |
 
 ---
 

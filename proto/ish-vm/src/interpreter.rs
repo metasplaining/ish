@@ -16,6 +16,10 @@ use crate::builtins;
 use crate::ledger::LedgerState;
 use crate::{module_loader, access_control, interface_checker};
 
+/// Sentinel exit code used when a process terminates without a numeric code
+/// (e.g., killed by signal).
+const MISSING_EXIT_CODE: i32 = -1;
+
 /// Signal for control flow: normal completion, return, throw, or break.
 enum ControlFlow {
     None,
@@ -252,47 +256,12 @@ impl IshVm {
                     }
                     AssignTarget::Property { object, property } => {
                         let obj = Self::eval_expression_yielding(vm, task, yc, object, env).await?;
-                        if let Value::Object(ref obj_ref) = obj {
-                            obj_ref.borrow_mut().insert(property.clone(), val);
-                        } else {
-                            return Err(RuntimeError::system_error(format!(
-                                "cannot set property '{}' on {}",
-                                property,
-                                obj.type_name()
-                            ), ErrorCode::TypeMismatch));
-                        }
+                        apply_property_write(&obj, property, val)?;
                     }
                     AssignTarget::Index { object, index } => {
                         let obj = Self::eval_expression_yielding(vm, task, yc, object, env).await?;
                         let idx = Self::eval_expression_yielding(vm, task, yc, index, env).await?;
-                        if let Value::List(ref list_ref) = obj {
-                            if let Value::Int(i) = idx {
-                                let mut list = list_ref.borrow_mut();
-                                let len = list.len() as i64;
-                                if i < 0 || i >= len {
-                                    return Err(RuntimeError::system_error(format!(
-                                        "index {} out of bounds (length {})",
-                                        i, len
-                                    ), ErrorCode::IndexOutOfBounds));
-                                }
-                                list[i as usize] = val;
-                            } else {
-                                return Err(RuntimeError::system_error("list index must be an integer", ErrorCode::TypeMismatch));
-                            }
-                        } else if let Value::Object(ref obj_ref) = obj {
-                            if let Value::String(ref key) = idx {
-                                obj_ref.borrow_mut().insert(key.as_ref().clone(), val);
-                            } else {
-                                return Err(RuntimeError::system_error(
-                                    "object index must be a string", ErrorCode::TypeMismatch
-                                ));
-                            }
-                        } else {
-                            return Err(RuntimeError::system_error(format!(
-                                "cannot index into {}",
-                                obj.type_name()
-                            ), ErrorCode::TypeMismatch));
-                        }
+                        apply_index_write(&obj, &idx, val)?;
                     }
                 }
                 Ok(ControlFlow::None)
@@ -943,14 +912,7 @@ impl IshVm {
     ) -> Pin<Box<dyn Future<Output = Result<Value, RuntimeError>> + 'a>> {
         Box::pin(async move {
         match expr {
-            Expression::Literal(lit) => Ok(match lit {
-                Literal::Bool(b) => Value::Bool(*b),
-                Literal::Int(n) => Value::Int(*n),
-                Literal::Float(f) => Value::Float(*f),
-                Literal::String(s) => Value::String(Rc::new(s.clone())),
-                Literal::Char(c) => Value::Char(*c),
-                Literal::Null => Value::Null,
-            }),
+            Expression::Literal(lit) => Ok(eval_literal(lit)),
 
             Expression::Identifier(name) => env.get(name),
 
@@ -978,25 +940,7 @@ impl IshVm {
 
             Expression::UnaryOp { op, operand } => {
                 let val = Self::eval_expression_yielding(vm, task, yc, operand, env).await?;
-                match op {
-                    UnaryOperator::Not => Ok(Value::Bool(!val.is_truthy())),
-                    UnaryOperator::Negate => match val {
-                        Value::Int(n) => Ok(Value::Int(-n)),
-                        Value::Float(f) => Ok(Value::Float(-f)),
-                        _ => Err(RuntimeError::system_error(format!(
-                            "cannot negate {}",
-                            val.type_name()
-                        ), ErrorCode::TypeMismatch)),
-                    },
-                    UnaryOperator::Try => {
-                        // ? operator: if value is an error, propagate it; otherwise unwrap
-                        // For now, null signals error
-                        if val == Value::Null {
-                            return Err(RuntimeError::system_error("tried to unwrap null value with ?".to_string(), ErrorCode::NullUnwrap));
-                        }
-                        Ok(val)
-                    }
-                }
+                eval_unary_op(op, val)
             }
 
             Expression::FunctionCall { callee, args } => {
@@ -1069,45 +1013,13 @@ impl IshVm {
 
             Expression::PropertyAccess { object, property } => {
                 let obj = Self::eval_expression_yielding(vm, task, yc, object, env).await?;
-                match obj {
-                    Value::Object(ref obj_ref) => {
-                        let map = obj_ref.borrow();
-                        Ok(map.get(property).cloned().unwrap_or(Value::Null))
-                    }
-                    _ => Err(RuntimeError::system_error(format!(
-                        "cannot access property '{}' on {}",
-                        property,
-                        obj.type_name()
-                    ), ErrorCode::TypeMismatch)),
-                }
+                apply_property_read(&obj, property)
             }
 
             Expression::IndexAccess { object, index } => {
                 let obj = Self::eval_expression_yielding(vm, task, yc, object, env).await?;
                 let idx = Self::eval_expression_yielding(vm, task, yc, index, env).await?;
-                match (&obj, &idx) {
-                    (Value::List(list_ref), Value::Int(i)) => {
-                        let list = list_ref.borrow();
-                        let i = *i;
-                        if i < 0 || i >= list.len() as i64 {
-                            return Err(RuntimeError::system_error(format!(
-                                "index {} out of bounds (length {})",
-                                i,
-                                list.len()
-                            ), ErrorCode::IndexOutOfBounds));
-                        }
-                        Ok(list[i as usize].clone())
-                    }
-                    (Value::Object(obj_ref), Value::String(key)) => {
-                        let map = obj_ref.borrow();
-                        Ok(map.get(key.as_ref()).cloned().unwrap_or(Value::Null))
-                    }
-                    _ => Err(RuntimeError::system_error(format!(
-                        "cannot index {} with {}",
-                        obj.type_name(),
-                        idx.type_name()
-                    ), ErrorCode::TypeMismatch)),
-                }
+                apply_index_read(&obj, &idx)
             }
 
             Expression::Lambda { params, body, is_async } => {
@@ -1791,7 +1703,7 @@ impl IshVm {
                     RuntimeError::system_error(format!("{}: {}", command, e), ErrorCode::ShellError)
                 })?;
 
-                let exit_code = output.status.code().unwrap_or(-1) as i64;
+                let exit_code = output.status.code().unwrap_or(MISSING_EXIT_CODE) as i64;
                 env.define("__ish_last_exit_code".to_string(), Value::Int(exit_code));
 
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -1800,7 +1712,7 @@ impl IshVm {
                     RuntimeError::system_error(format!("{}: {}", command, e), ErrorCode::ShellError)
                 })?;
 
-                let exit_code = status.code().unwrap_or(-1) as i64;
+                let exit_code = status.code().unwrap_or(MISSING_EXIT_CODE) as i64;
                 env.define("__ish_last_exit_code".to_string(), Value::Int(exit_code));
 
                 Ok(String::new())
@@ -1846,7 +1758,7 @@ impl IshVm {
                     let output = next_child.wait_with_output().await.map_err(|e| {
                         RuntimeError::system_error(format!("{}: {}", pipe.command, e), ErrorCode::ShellError)
                     })?;
-                    let exit_code = output.status.code().unwrap_or(-1) as i64;
+                    let exit_code = output.status.code().unwrap_or(MISSING_EXIT_CODE) as i64;
                     env.define("__ish_last_exit_code".to_string(), Value::Int(exit_code));
 
                     // Wait for the first command too
@@ -2122,47 +2034,12 @@ impl IshVm {
                     }
                     AssignTarget::Property { object, property } => {
                         let obj = Self::eval_expression_unyielding(vm, task, object, env)?;
-                        if let Value::Object(ref obj_ref) = obj {
-                            obj_ref.borrow_mut().insert(property.clone(), val);
-                        } else {
-                            return Err(RuntimeError::system_error(format!(
-                                "cannot set property '{}' on {}",
-                                property,
-                                obj.type_name()
-                            ), ErrorCode::TypeMismatch));
-                        }
+                        apply_property_write(&obj, property, val)?;
                     }
                     AssignTarget::Index { object, index } => {
                         let obj = Self::eval_expression_unyielding(vm, task, object, env)?;
                         let idx = Self::eval_expression_unyielding(vm, task, index, env)?;
-                        if let Value::List(ref list_ref) = obj {
-                            if let Value::Int(i) = idx {
-                                let mut list = list_ref.borrow_mut();
-                                let len = list.len() as i64;
-                                if i < 0 || i >= len {
-                                    return Err(RuntimeError::system_error(format!(
-                                        "index {} out of bounds (length {})",
-                                        i, len
-                                    ), ErrorCode::IndexOutOfBounds));
-                                }
-                                list[i as usize] = val;
-                            } else {
-                                return Err(RuntimeError::system_error("list index must be an integer", ErrorCode::TypeMismatch));
-                            }
-                        } else if let Value::Object(ref obj_ref) = obj {
-                            if let Value::String(ref key) = idx {
-                                obj_ref.borrow_mut().insert(key.as_ref().clone(), val);
-                            } else {
-                                return Err(RuntimeError::system_error(
-                                    "object index must be a string", ErrorCode::TypeMismatch
-                                ));
-                            }
-                        } else {
-                            return Err(RuntimeError::system_error(format!(
-                                "cannot index into {}",
-                                obj.type_name()
-                            ), ErrorCode::TypeMismatch));
-                        }
+                        apply_index_write(&obj, &idx, val)?;
                     }
                 }
                 Ok(ControlFlow::None)
@@ -2619,14 +2496,7 @@ impl IshVm {
         env: &Environment,
     ) -> Result<Value, RuntimeError> {
         match expr {
-            Expression::Literal(lit) => Ok(match lit {
-                Literal::Bool(b) => Value::Bool(*b),
-                Literal::Int(n) => Value::Int(*n),
-                Literal::Float(f) => Value::Float(*f),
-                Literal::String(s) => Value::String(Rc::new(s.clone())),
-                Literal::Char(c) => Value::Char(*c),
-                Literal::Null => Value::Null,
-            }),
+            Expression::Literal(lit) => Ok(eval_literal(lit)),
 
             Expression::Identifier(name) => env.get(name),
 
@@ -2653,23 +2523,7 @@ impl IshVm {
 
             Expression::UnaryOp { op, operand } => {
                 let val = Self::eval_expression_unyielding(vm, task, operand, env)?;
-                match op {
-                    UnaryOperator::Not => Ok(Value::Bool(!val.is_truthy())),
-                    UnaryOperator::Negate => match val {
-                        Value::Int(n) => Ok(Value::Int(-n)),
-                        Value::Float(f) => Ok(Value::Float(-f)),
-                        _ => Err(RuntimeError::system_error(format!(
-                            "cannot negate {}",
-                            val.type_name()
-                        ), ErrorCode::TypeMismatch)),
-                    },
-                    UnaryOperator::Try => {
-                        if val == Value::Null {
-                            return Err(RuntimeError::system_error("tried to unwrap null value with ?".to_string(), ErrorCode::NullUnwrap));
-                        }
-                        Ok(val)
-                    }
-                }
+                eval_unary_op(op, val)
             }
 
             Expression::FunctionCall { callee, args } => {
@@ -2700,45 +2554,13 @@ impl IshVm {
 
             Expression::PropertyAccess { object, property } => {
                 let obj = Self::eval_expression_unyielding(vm, task, object, env)?;
-                match obj {
-                    Value::Object(ref obj_ref) => {
-                        let map = obj_ref.borrow();
-                        Ok(map.get(property).cloned().unwrap_or(Value::Null))
-                    }
-                    _ => Err(RuntimeError::system_error(format!(
-                        "cannot access property '{}' on {}",
-                        property,
-                        obj.type_name()
-                    ), ErrorCode::TypeMismatch)),
-                }
+                apply_property_read(&obj, property)
             }
 
             Expression::IndexAccess { object, index } => {
                 let obj = Self::eval_expression_unyielding(vm, task, object, env)?;
                 let idx = Self::eval_expression_unyielding(vm, task, index, env)?;
-                match (&obj, &idx) {
-                    (Value::List(list_ref), Value::Int(i)) => {
-                        let list = list_ref.borrow();
-                        let i = *i;
-                        if i < 0 || i >= list.len() as i64 {
-                            return Err(RuntimeError::system_error(format!(
-                                "index {} out of bounds (length {})",
-                                i,
-                                list.len()
-                            ), ErrorCode::IndexOutOfBounds));
-                        }
-                        Ok(list[i as usize].clone())
-                    }
-                    (Value::Object(obj_ref), Value::String(key)) => {
-                        let map = obj_ref.borrow();
-                        Ok(map.get(key.as_ref()).cloned().unwrap_or(Value::Null))
-                    }
-                    _ => Err(RuntimeError::system_error(format!(
-                        "cannot index {} with {}",
-                        obj.type_name(),
-                        idx.type_name()
-                    ), ErrorCode::TypeMismatch)),
-                }
+                apply_index_read(&obj, &idx)
             }
 
             Expression::Lambda { params, body, is_async } => {
@@ -3197,6 +3019,20 @@ fn resolve_shell_var(name: &str, env: &Environment) -> String {
     }
 }
 
+/// Scan forward from `start` in `chars` to find `}`. Returns the variable name
+/// and the index of the character after `}`, or `None` if `}` is not found.
+fn scan_to_close_brace(chars: &[char], start: usize) -> Option<(String, usize)> {
+    let mut j = start;
+    while j < chars.len() && chars[j] != '}' {
+        j += 1;
+    }
+    if j < chars.len() {
+        Some((chars[start..j].iter().collect(), j + 1))
+    } else {
+        None
+    }
+}
+
 fn interpolate_shell_quoted(input: &str, env: &Environment) -> String {
     let mut out = String::new();
     let chars: Vec<char> = input.chars().collect();
@@ -3207,14 +3043,9 @@ fn interpolate_shell_quoted(input: &str, env: &Environment) -> String {
 
         if c == '$' {
             if i + 1 < chars.len() && chars[i + 1] == '{' {
-                let mut j = i + 2;
-                while j < chars.len() && chars[j] != '}' {
-                    j += 1;
-                }
-                if j < chars.len() {
-                    let name: String = chars[i + 2..j].iter().collect();
+                if let Some((name, next_i)) = scan_to_close_brace(&chars, i + 2) {
                     out.push_str(&resolve_shell_var(&name, env));
-                    i = j + 1;
+                    i = next_i;
                     continue;
                 }
             } else if i + 1 < chars.len() && chars[i + 1] == '?' {
@@ -3237,18 +3068,13 @@ fn interpolate_shell_quoted(input: &str, env: &Environment) -> String {
         }
 
         if c == '{' {
-            let mut j = i + 1;
-            while j < chars.len() && chars[j] != '}' {
-                j += 1;
-            }
-            if j < chars.len() {
-                let name: String = chars[i + 1..j].iter().collect();
+            if let Some((name, next_i)) = scan_to_close_brace(&chars, i + 1) {
                 if !name.is_empty()
-                    && (name.chars().next().unwrap().is_ascii_alphabetic() || name.starts_with('_'))
+                    && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
                     && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
                 {
                     out.push_str(&resolve_shell_var(&name, env));
-                    i = j + 1;
+                    i = next_i;
                     continue;
                 }
             }
@@ -3259,6 +3085,128 @@ fn interpolate_shell_quoted(input: &str, env: &Environment) -> String {
     }
 
     out
+}
+
+// ── Shared helpers for yielding / unyielding interpreters ───────────────────
+
+fn eval_literal(lit: &Literal) -> Value {
+    match lit {
+        Literal::Bool(b) => Value::Bool(*b),
+        Literal::Int(n) => Value::Int(*n),
+        Literal::Float(f) => Value::Float(*f),
+        Literal::String(s) => Value::String(Rc::new(s.clone())),
+        Literal::Char(c) => Value::Char(*c),
+        Literal::Null => Value::Null,
+    }
+}
+
+fn eval_unary_op(op: &UnaryOperator, val: Value) -> Result<Value, RuntimeError> {
+    match op {
+        UnaryOperator::Not => Ok(Value::Bool(!val.is_truthy())),
+        UnaryOperator::Negate => match val {
+            Value::Int(n) => Ok(Value::Int(-n)),
+            Value::Float(f) => Ok(Value::Float(-f)),
+            _ => Err(RuntimeError::system_error(
+                format!("cannot negate {}", val.type_name()),
+                ErrorCode::TypeMismatch,
+            )),
+        },
+        UnaryOperator::Try => {
+            if val == Value::Null {
+                return Err(RuntimeError::system_error(
+                    "tried to unwrap null value with ?".to_string(),
+                    ErrorCode::NullUnwrap,
+                ));
+            }
+            Ok(val)
+        }
+    }
+}
+
+fn apply_property_read(obj: &Value, property: &str) -> Result<Value, RuntimeError> {
+    match obj {
+        Value::Object(obj_ref) => {
+            let map = obj_ref.borrow();
+            Ok(map.get(property).cloned().unwrap_or(Value::Null))
+        }
+        _ => Err(RuntimeError::system_error(
+            format!("cannot access property '{}' on {}", property, obj.type_name()),
+            ErrorCode::TypeMismatch,
+        )),
+    }
+}
+
+fn apply_index_read(obj: &Value, idx: &Value) -> Result<Value, RuntimeError> {
+    match (obj, idx) {
+        (Value::List(list_ref), Value::Int(i)) => {
+            let list = list_ref.borrow();
+            let i = *i;
+            if i < 0 || i >= list.len() as i64 {
+                return Err(RuntimeError::system_error(
+                    format!("index {} out of bounds (length {})", i, list.len()),
+                    ErrorCode::IndexOutOfBounds,
+                ));
+            }
+            Ok(list[i as usize].clone())
+        }
+        (Value::Object(obj_ref), Value::String(key)) => {
+            let map = obj_ref.borrow();
+            Ok(map.get(key.as_ref()).cloned().unwrap_or(Value::Null))
+        }
+        _ => Err(RuntimeError::system_error(
+            format!("cannot index {} with {}", obj.type_name(), idx.type_name()),
+            ErrorCode::TypeMismatch,
+        )),
+    }
+}
+
+fn apply_property_write(obj: &Value, property: &str, val: Value) -> Result<(), RuntimeError> {
+    if let Value::Object(ref obj_ref) = obj {
+        obj_ref.borrow_mut().insert(property.to_string(), val);
+        Ok(())
+    } else {
+        Err(RuntimeError::system_error(
+            format!("cannot set property '{}' on {}", property, obj.type_name()),
+            ErrorCode::TypeMismatch,
+        ))
+    }
+}
+
+fn apply_index_write(obj: &Value, idx: &Value, val: Value) -> Result<(), RuntimeError> {
+    if let Value::List(ref list_ref) = obj {
+        if let Value::Int(i) = idx {
+            let mut list = list_ref.borrow_mut();
+            let len = list.len() as i64;
+            if *i < 0 || *i >= len {
+                return Err(RuntimeError::system_error(
+                    format!("index {} out of bounds (length {})", i, len),
+                    ErrorCode::IndexOutOfBounds,
+                ));
+            }
+            list[*i as usize] = val;
+            Ok(())
+        } else {
+            Err(RuntimeError::system_error(
+                "list index must be an integer",
+                ErrorCode::TypeMismatch,
+            ))
+        }
+    } else if let Value::Object(ref obj_ref) = obj {
+        if let Value::String(ref key) = idx {
+            obj_ref.borrow_mut().insert(key.as_ref().clone(), val);
+            Ok(())
+        } else {
+            Err(RuntimeError::system_error(
+                "object index must be a string",
+                ErrorCode::TypeMismatch,
+            ))
+        }
+    } else {
+        Err(RuntimeError::system_error(
+            format!("cannot index into {}", obj.type_name()),
+            ErrorCode::TypeMismatch,
+        ))
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

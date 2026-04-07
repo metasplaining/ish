@@ -117,7 +117,9 @@ fn build_let_stmt(pair: Pair<Rule>) -> Result<Statement, ParseError> {
         name,
         mutable,
         type_annotation,
-        value: value.unwrap(),
+        value: value.ok_or_else(|| ParseError::new(0, 0,
+            "variable declaration missing value".to_string()
+        ))?,
         visibility,
     })
 }
@@ -872,7 +874,8 @@ pub fn build_expression(pair: Pair<Rule>) -> Result<Expression, ParseError> {
 
         Rule::integer_literal => {
             let val: i64 = pair.as_str().parse().map_err(|_| {
-                ParseError::new(pair.as_span().start(), pair.as_span().end(), "invalid integer")
+                ParseError::new(pair.as_span().start(), pair.as_span().end(),
+                    format!("integer literal '{}' overflows i64", pair.as_str()))
             })?;
             Ok(Expression::Literal(Literal::Int(val)))
         }
@@ -1442,7 +1445,7 @@ fn strip_triple_quote_literal(s: &str) -> String {
         return String::new();
     }
     // The last line's leading whitespace defines the baseline
-    let last_line = lines.last().unwrap();
+    let last_line = lines.last().copied().unwrap_or("");
     let baseline = last_line.len() - last_line.trim_start().len();
     let mut result_lines = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -1561,11 +1564,17 @@ fn build_match_pattern(pair: Pair<Rule>) -> Result<MatchPattern, ParseError> {
     };
     match inner.as_rule() {
         Rule::integer_literal => {
-            let n: i64 = inner.as_str().parse().unwrap();
+            let s = inner.as_str();
+            let n: i64 = s.parse().map_err(|_| ParseError::new(0, 0,
+                format!("integer literal '{}' overflows i64", s)
+            ))?;
             Ok(MatchPattern::Literal(Literal::Int(n)))
         }
         Rule::float_literal => {
-            let n: f64 = inner.as_str().parse().unwrap();
+            let s = inner.as_str();
+            let n: f64 = s.parse().map_err(|_| ParseError::new(0, 0,
+                format!("float literal '{}' is not a valid f64", s)
+            ))?;
             Ok(MatchPattern::Literal(Literal::Float(n)))
         }
         Rule::boolean_literal => {

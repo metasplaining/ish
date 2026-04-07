@@ -36,6 +36,7 @@ Cleaned-up prompt files used as input to the `/propose` skill. Each RFP preserve
 | 2026-04-04 | Analyzer Correctness Fixes | [analyzer-correctness.md](analyzer-correctness.md) |
 | 2026-04-04 | Agent Instructions Improvements | [agent-instructions-improvements.md](agent-instructions-improvements.md) |
 | 2026-04-05 | Module System | [module-system.md](module-system.md) |
+| 2026-04-06 | Refactoring — Prototype | [refactoring-prototype.md](refactoring-prototype.md) |
 
 ---
 

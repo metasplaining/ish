@@ -61,4 +61,8 @@ assert_output "shell quoted interpolation with ish and env vars" "$expected" "$o
 # undefined variable produces error
 assert_exit_code "undefined variable is error" 1 'println(undefined_var)'
 
+# integer literal overflow
+output=$(run_ish 'let x = 99999999999999999999')
+assert_output_contains "integer literal overflow" "overflows" "$output"
+
 finish

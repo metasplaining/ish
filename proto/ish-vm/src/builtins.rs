@@ -8,6 +8,25 @@ use crate::environment::Environment;
 use crate::error::{ErrorCode, RuntimeError};
 use crate::value::{self, *};
 
+/// Check that `args` has exactly `n` elements; return a structured error otherwise.
+fn arity(name: &str, args: &[Value], n: usize) -> Result<(), RuntimeError> {
+    if args.len() != n {
+        return Err(RuntimeError::system_error(
+            format!("{} expects {} argument(s), got {}", name, n, args.len()),
+            ErrorCode::ArgumentCountMismatch,
+        ));
+    }
+    Ok(())
+}
+
+/// Create a builtin function value with no typed parameters (the common case).
+fn new_builtin(
+    name: &'static str,
+    f: impl Fn(&[Value]) -> Result<Value, RuntimeError> + 'static,
+) -> Value {
+    new_compiled_function(name, vec![], vec![], None, f, Some(false))
+}
+
 /// Configuration for builtin output routing.
 #[derive(Clone, Default)]
 pub struct BuiltinConfig {
@@ -155,9 +174,7 @@ fn register_io(env: &Environment, config: &BuiltinConfig) {
     env.define(
         "read_file".into(),
         new_compiled_function("read_file", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("read_file expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
+            arity("read_file", args, 1)?;
             let path = match &args[0] {
                 Value::String(p) => p.to_string(),
                 _ => return Err(RuntimeError::system_error("read_file expects a string path", ErrorCode::TypeMismatch)),
@@ -175,9 +192,7 @@ fn register_io(env: &Environment, config: &BuiltinConfig) {
     env.define(
         "write_file".into(),
         new_compiled_function("write_file", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("write_file expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
+            arity("write_file", args, 2)?;
             let (path, content) = match (&args[0], &args[1]) {
                 (Value::String(p), Value::String(c)) => (p.to_string(), c.to_string()),
                 _ => return Err(RuntimeError::system_error(
@@ -197,418 +212,298 @@ fn register_io(env: &Environment, config: &BuiltinConfig) {
 // ── String operations ───────────────────────────────────────────────────────
 
 fn register_strings(env: &Environment) {
-    env.define(
-        "str_concat".into(),
-        new_compiled_function("str_concat", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("str_concat expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            let a = args[0].to_display_string();
-            let b = args[1].to_display_string();
-            Ok(Value::String(Rc::new(format!("{}{}", a, b))))
-        }, Some(false)),
-    );
+    env.define("str_concat".into(), new_builtin("str_concat", |args| {
+        arity("str_concat", args, 2)?;
+        let a = args[0].to_display_string();
+        let b = args[1].to_display_string();
+        Ok(Value::String(Rc::new(format!("{}{}", a, b))))
+    }));
 
-    env.define(
-        "str_length".into(),
-        new_compiled_function("str_length", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("str_length expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            if let Value::String(s) = &args[0] {
-                Ok(Value::Int(s.len() as i64))
-            } else {
-                Err(RuntimeError::system_error("str_length expects a string", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("str_length".into(), new_builtin("str_length", |args| {
+        arity("str_length", args, 1)?;
+        if let Value::String(s) = &args[0] {
+            Ok(Value::Int(s.len() as i64))
+        } else {
+            Err(RuntimeError::system_error("str_length expects a string", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "str_slice".into(),
-        new_compiled_function("str_slice", vec![], vec![], None, |args| {
-            if args.len() != 3 {
-                return Err(RuntimeError::system_error("str_slice expects 3 arguments", ErrorCode::ArgumentCountMismatch));
+    env.define("str_slice".into(), new_builtin("str_slice", |args| {
+        arity("str_slice", args, 3)?;
+        if let (Value::String(s), Value::Int(start), Value::Int(end)) =
+            (&args[0], &args[1], &args[2])
+        {
+            let start = *start as usize;
+            let end = (*end as usize).min(s.len());
+            if start > end || start > s.len() {
+                return Ok(Value::String(Rc::new(String::new())));
             }
-            if let (Value::String(s), Value::Int(start), Value::Int(end)) =
-                (&args[0], &args[1], &args[2])
-            {
-                let start = *start as usize;
-                let end = (*end as usize).min(s.len());
-                if start > end || start > s.len() {
-                    return Ok(Value::String(Rc::new(String::new())));
-                }
-                Ok(Value::String(Rc::new(s[start..end].to_string())))
-            } else {
-                Err(RuntimeError::system_error("str_slice expects (string, int, int)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+            Ok(Value::String(Rc::new(s[start..end].to_string())))
+        } else {
+            Err(RuntimeError::system_error("str_slice expects (string, int, int)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "str_contains".into(),
-        new_compiled_function("str_contains", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("str_contains expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::String(s), Value::String(substr)) = (&args[0], &args[1]) {
-                Ok(Value::Bool(s.contains(substr.as_ref())))
-            } else {
-                Err(RuntimeError::system_error("str_contains expects (string, string)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("str_contains".into(), new_builtin("str_contains", |args| {
+        arity("str_contains", args, 2)?;
+        if let (Value::String(s), Value::String(substr)) = (&args[0], &args[1]) {
+            Ok(Value::Bool(s.contains(substr.as_ref())))
+        } else {
+            Err(RuntimeError::system_error("str_contains expects (string, string)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "str_starts_with".into(),
-        new_compiled_function("str_starts_with", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("str_starts_with expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::String(s), Value::String(prefix)) = (&args[0], &args[1]) {
-                Ok(Value::Bool(s.starts_with(prefix.as_ref())))
-            } else {
-                Err(RuntimeError::system_error(
-                    "str_starts_with expects (string, string)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("str_starts_with".into(), new_builtin("str_starts_with", |args| {
+        arity("str_starts_with", args, 2)?;
+        if let (Value::String(s), Value::String(prefix)) = (&args[0], &args[1]) {
+            Ok(Value::Bool(s.starts_with(prefix.as_ref())))
+        } else {
+            Err(RuntimeError::system_error(
+                "str_starts_with expects (string, string)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "str_replace".into(),
-        new_compiled_function("str_replace", vec![], vec![], None, |args| {
-            if args.len() != 3 {
-                return Err(RuntimeError::system_error("str_replace expects 3 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::String(s), Value::String(from), Value::String(to)) =
-                (&args[0], &args[1], &args[2])
-            {
-                Ok(Value::String(Rc::new(
-                    s.replace(from.as_ref(), to.as_ref()),
-                )))
-            } else {
-                Err(RuntimeError::system_error(
-                    "str_replace expects (string, string, string)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("str_replace".into(), new_builtin("str_replace", |args| {
+        arity("str_replace", args, 3)?;
+        if let (Value::String(s), Value::String(from), Value::String(to)) =
+            (&args[0], &args[1], &args[2])
+        {
+            Ok(Value::String(Rc::new(
+                s.replace(from.as_ref(), to.as_ref()),
+            )))
+        } else {
+            Err(RuntimeError::system_error(
+                "str_replace expects (string, string, string)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "str_split".into(),
-        new_compiled_function("str_split", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("str_split expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::String(s), Value::String(delim)) = (&args[0], &args[1]) {
-                let parts: Vec<Value> = s
-                    .split(delim.as_ref())
-                    .map(|p| Value::String(Rc::new(p.to_string())))
-                    .collect();
-                Ok(new_list(parts))
-            } else {
-                Err(RuntimeError::system_error("str_split expects (string, string)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("str_split".into(), new_builtin("str_split", |args| {
+        arity("str_split", args, 2)?;
+        if let (Value::String(s), Value::String(delim)) = (&args[0], &args[1]) {
+            let parts: Vec<Value> = s
+                .split(delim.as_ref())
+                .map(|p| Value::String(Rc::new(p.to_string())))
+                .collect();
+            Ok(new_list(parts))
+        } else {
+            Err(RuntimeError::system_error("str_split expects (string, string)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "str_to_upper".into(),
-        new_compiled_function("str_to_upper", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("str_to_upper expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            if let Value::String(s) = &args[0] {
-                Ok(Value::String(Rc::new(s.to_uppercase())))
-            } else {
-                Err(RuntimeError::system_error("str_to_upper expects a string", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("str_to_upper".into(), new_builtin("str_to_upper", |args| {
+        arity("str_to_upper", args, 1)?;
+        if let Value::String(s) = &args[0] {
+            Ok(Value::String(Rc::new(s.to_uppercase())))
+        } else {
+            Err(RuntimeError::system_error("str_to_upper expects a string", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "str_to_lower".into(),
-        new_compiled_function("str_to_lower", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("str_to_lower expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            if let Value::String(s) = &args[0] {
-                Ok(Value::String(Rc::new(s.to_lowercase())))
-            } else {
-                Err(RuntimeError::system_error("str_to_lower expects a string", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("str_to_lower".into(), new_builtin("str_to_lower", |args| {
+        arity("str_to_lower", args, 1)?;
+        if let Value::String(s) = &args[0] {
+            Ok(Value::String(Rc::new(s.to_lowercase())))
+        } else {
+            Err(RuntimeError::system_error("str_to_lower expects a string", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "str_char_at".into(),
-        new_compiled_function("str_char_at", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("str_char_at expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::String(s), Value::Int(i)) = (&args[0], &args[1]) {
-                let i = *i as usize;
-                if let Some(ch) = s.chars().nth(i) {
-                    Ok(Value::String(Rc::new(ch.to_string())))
-                } else {
-                    Ok(Value::Null)
-                }
+    env.define("str_char_at".into(), new_builtin("str_char_at", |args| {
+        arity("str_char_at", args, 2)?;
+        if let (Value::String(s), Value::Int(i)) = (&args[0], &args[1]) {
+            let i = *i as usize;
+            if let Some(ch) = s.chars().nth(i) {
+                Ok(Value::String(Rc::new(ch.to_string())))
             } else {
-                Err(RuntimeError::system_error("str_char_at expects (string, int)", ErrorCode::TypeMismatch))
+                Ok(Value::Null)
             }
-        }, Some(false)),
-    );
+        } else {
+            Err(RuntimeError::system_error("str_char_at expects (string, int)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "str_trim".into(),
-        new_compiled_function("str_trim", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("str_trim expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            if let Value::String(s) = &args[0] {
-                Ok(Value::String(Rc::new(s.trim().to_string())))
-            } else {
-                Err(RuntimeError::system_error("str_trim expects a string", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("str_trim".into(), new_builtin("str_trim", |args| {
+        arity("str_trim", args, 1)?;
+        if let Value::String(s) = &args[0] {
+            Ok(Value::String(Rc::new(s.trim().to_string())))
+        } else {
+            Err(RuntimeError::system_error("str_trim expects a string", ErrorCode::TypeMismatch))
+        }
+    }));
 }
 
 // ── List operations ─────────────────────────────────────────────────────────
 
 fn register_lists(env: &Environment) {
-    env.define(
-        "list_push".into(),
-        new_compiled_function("list_push", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("list_push expects 2 arguments", ErrorCode::ArgumentCountMismatch));
+    env.define("list_push".into(), new_builtin("list_push", |args| {
+        arity("list_push", args, 2)?;
+        if let Value::List(list_ref) = &args[0] {
+            list_ref.borrow_mut().push(args[1].clone());
+            Ok(Value::Null)
+        } else {
+            Err(RuntimeError::system_error("list_push expects a list as first argument", ErrorCode::ArgumentCountMismatch))
+        }
+    }));
+
+    env.define("list_pop".into(), new_builtin("list_pop", |args| {
+        arity("list_pop", args, 1)?;
+        if let Value::List(list_ref) = &args[0] {
+            Ok(list_ref.borrow_mut().pop().unwrap_or(Value::Null))
+        } else {
+            Err(RuntimeError::system_error("list_pop expects a list", ErrorCode::TypeMismatch))
+        }
+    }));
+
+    env.define("list_length".into(), new_builtin("list_length", |args| {
+        arity("list_length", args, 1)?;
+        if let Value::List(list_ref) = &args[0] {
+            Ok(Value::Int(list_ref.borrow().len() as i64))
+        } else {
+            Err(RuntimeError::system_error("list_length expects a list", ErrorCode::TypeMismatch))
+        }
+    }));
+
+    env.define("list_get".into(), new_builtin("list_get", |args| {
+        arity("list_get", args, 2)?;
+        if let (Value::List(list_ref), Value::Int(i)) = (&args[0], &args[1]) {
+            let list = list_ref.borrow();
+            let i = *i as usize;
+            if i < list.len() {
+                Ok(list[i].clone())
+            } else {
+                Err(RuntimeError::system_error(format!(
+                    "index {} out of bounds (length {})",
+                    i,
+                    list.len()
+                ), ErrorCode::TypeMismatch))
             }
-            if let Value::List(list_ref) = &args[0] {
-                list_ref.borrow_mut().push(args[1].clone());
+        } else {
+            Err(RuntimeError::system_error("list_get expects (list, int)", ErrorCode::TypeMismatch))
+        }
+    }));
+
+    env.define("list_set".into(), new_builtin("list_set", |args| {
+        arity("list_set", args, 3)?;
+        if let (Value::List(list_ref), Value::Int(i)) = (&args[0], &args[1]) {
+            let mut list = list_ref.borrow_mut();
+            let i = *i as usize;
+            if i < list.len() {
+                list[i] = args[2].clone();
                 Ok(Value::Null)
             } else {
-                Err(RuntimeError::system_error("list_push expects a list as first argument", ErrorCode::ArgumentCountMismatch))
+                Err(RuntimeError::system_error(format!(
+                    "index {} out of bounds (length {})",
+                    i,
+                    list.len()
+                ), ErrorCode::TypeMismatch))
             }
-        }, Some(false)),
-    );
+        } else {
+            Err(RuntimeError::system_error("list_set expects (list, int, value)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "list_pop".into(),
-        new_compiled_function("list_pop", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("list_pop expects 1 argument", ErrorCode::ArgumentCountMismatch));
+    env.define("list_slice".into(), new_builtin("list_slice", |args| {
+        arity("list_slice", args, 3)?;
+        if let (Value::List(list_ref), Value::Int(start), Value::Int(end)) =
+            (&args[0], &args[1], &args[2])
+        {
+            let list = list_ref.borrow();
+            let start = *start as usize;
+            let end = (*end as usize).min(list.len());
+            if start > end {
+                return Ok(new_list(vec![]));
             }
-            if let Value::List(list_ref) = &args[0] {
-                Ok(list_ref.borrow_mut().pop().unwrap_or(Value::Null))
-            } else {
-                Err(RuntimeError::system_error("list_pop expects a list", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+            Ok(new_list(list[start..end].to_vec()))
+        } else {
+            Err(RuntimeError::system_error("list_slice expects (list, int, int)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "list_length".into(),
-        new_compiled_function("list_length", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("list_length expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            if let Value::List(list_ref) = &args[0] {
-                Ok(Value::Int(list_ref.borrow().len() as i64))
-            } else {
-                Err(RuntimeError::system_error("list_length expects a list", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
-
-    env.define(
-        "list_get".into(),
-        new_compiled_function("list_get", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("list_get expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::List(list_ref), Value::Int(i)) = (&args[0], &args[1]) {
-                let list = list_ref.borrow();
-                let i = *i as usize;
-                if i < list.len() {
-                    Ok(list[i].clone())
-                } else {
-                    Err(RuntimeError::system_error(format!(
-                        "index {} out of bounds (length {})",
-                        i,
-                        list.len()
-                    ), ErrorCode::TypeMismatch))
-                }
-            } else {
-                Err(RuntimeError::system_error("list_get expects (list, int)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
-
-    env.define(
-        "list_set".into(),
-        new_compiled_function("list_set", vec![], vec![], None, |args| {
-            if args.len() != 3 {
-                return Err(RuntimeError::system_error("list_set expects 3 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::List(list_ref), Value::Int(i)) = (&args[0], &args[1]) {
-                let mut list = list_ref.borrow_mut();
-                let i = *i as usize;
-                if i < list.len() {
-                    list[i] = args[2].clone();
-                    Ok(Value::Null)
-                } else {
-                    Err(RuntimeError::system_error(format!(
-                        "index {} out of bounds (length {})",
-                        i,
-                        list.len()
-                    ), ErrorCode::TypeMismatch))
-                }
-            } else {
-                Err(RuntimeError::system_error("list_set expects (list, int, value)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
-
-    env.define(
-        "list_slice".into(),
-        new_compiled_function("list_slice", vec![], vec![], None, |args| {
-            if args.len() != 3 {
-                return Err(RuntimeError::system_error("list_slice expects 3 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::List(list_ref), Value::Int(start), Value::Int(end)) =
-                (&args[0], &args[1], &args[2])
-            {
-                let list = list_ref.borrow();
-                let start = *start as usize;
-                let end = (*end as usize).min(list.len());
-                if start > end {
-                    return Ok(new_list(vec![]));
-                }
-                Ok(new_list(list[start..end].to_vec()))
-            } else {
-                Err(RuntimeError::system_error("list_slice expects (list, int, int)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
-
-    env.define(
-        "list_join".into(),
-        new_compiled_function("list_join", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("list_join expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::List(list_ref), Value::String(sep)) = (&args[0], &args[1]) {
-                let list = list_ref.borrow();
-                let strs: Vec<String> = list.iter().map(|v| v.to_display_string()).collect();
-                Ok(Value::String(Rc::new(strs.join(sep.as_ref()))))
-            } else {
-                Err(RuntimeError::system_error("list_join expects (list, string)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("list_join".into(), new_builtin("list_join", |args| {
+        arity("list_join", args, 2)?;
+        if let (Value::List(list_ref), Value::String(sep)) = (&args[0], &args[1]) {
+            let list = list_ref.borrow();
+            let strs: Vec<String> = list.iter().map(|v| v.to_display_string()).collect();
+            Ok(Value::String(Rc::new(strs.join(sep.as_ref()))))
+        } else {
+            Err(RuntimeError::system_error("list_join expects (list, string)", ErrorCode::TypeMismatch))
+        }
+    }));
 }
 
 // ── Object operations ───────────────────────────────────────────────────────
 
 fn register_objects(env: &Environment) {
-    env.define(
-        "obj_get".into(),
-        new_compiled_function("obj_get", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("obj_get expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
-                Ok(obj_ref
-                    .borrow()
-                    .get(key.as_ref())
-                    .cloned()
-                    .unwrap_or(Value::Null))
-            } else {
-                Err(RuntimeError::system_error("obj_get expects (object, string)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("obj_get".into(), new_builtin("obj_get", |args| {
+        arity("obj_get", args, 2)?;
+        if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
+            Ok(obj_ref
+                .borrow()
+                .get(key.as_ref())
+                .cloned()
+                .unwrap_or(Value::Null))
+        } else {
+            Err(RuntimeError::system_error("obj_get expects (object, string)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "obj_set".into(),
-        new_compiled_function("obj_set", vec![], vec![], None, |args| {
-            if args.len() != 3 {
-                return Err(RuntimeError::system_error("obj_set expects 3 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
-                obj_ref
-                    .borrow_mut()
-                    .insert(key.as_ref().clone(), args[2].clone());
-                Ok(Value::Null)
-            } else {
-                Err(RuntimeError::system_error("obj_set expects (object, string, value)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("obj_set".into(), new_builtin("obj_set", |args| {
+        arity("obj_set", args, 3)?;
+        if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
+            obj_ref
+                .borrow_mut()
+                .insert(key.as_ref().clone(), args[2].clone());
+            Ok(Value::Null)
+        } else {
+            Err(RuntimeError::system_error("obj_set expects (object, string, value)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "obj_has".into(),
-        new_compiled_function("obj_has", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("obj_has expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
-                Ok(Value::Bool(obj_ref.borrow().contains_key(key.as_ref())))
-            } else {
-                Err(RuntimeError::system_error("obj_has expects (object, string)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("obj_has".into(), new_builtin("obj_has", |args| {
+        arity("obj_has", args, 2)?;
+        if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
+            Ok(Value::Bool(obj_ref.borrow().contains_key(key.as_ref())))
+        } else {
+            Err(RuntimeError::system_error("obj_has expects (object, string)", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "obj_keys".into(),
-        new_compiled_function("obj_keys", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("obj_keys expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            if let Value::Object(obj_ref) = &args[0] {
-                let keys: Vec<Value> = obj_ref
-                    .borrow()
-                    .keys()
-                    .map(|k| Value::String(Rc::new(k.clone())))
-                    .collect();
-                Ok(new_list(keys))
-            } else {
-                Err(RuntimeError::system_error("obj_keys expects an object", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("obj_keys".into(), new_builtin("obj_keys", |args| {
+        arity("obj_keys", args, 1)?;
+        if let Value::Object(obj_ref) = &args[0] {
+            let keys: Vec<Value> = obj_ref
+                .borrow()
+                .keys()
+                .map(|k| Value::String(Rc::new(k.clone())))
+                .collect();
+            Ok(new_list(keys))
+        } else {
+            Err(RuntimeError::system_error("obj_keys expects an object", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "obj_values".into(),
-        new_compiled_function("obj_values", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("obj_values expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            if let Value::Object(obj_ref) = &args[0] {
-                let values: Vec<Value> = obj_ref.borrow().values().cloned().collect();
-                Ok(new_list(values))
-            } else {
-                Err(RuntimeError::system_error("obj_values expects an object", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("obj_values".into(), new_builtin("obj_values", |args| {
+        arity("obj_values", args, 1)?;
+        if let Value::Object(obj_ref) = &args[0] {
+            let values: Vec<Value> = obj_ref.borrow().values().cloned().collect();
+            Ok(new_list(values))
+        } else {
+            Err(RuntimeError::system_error("obj_values expects an object", ErrorCode::TypeMismatch))
+        }
+    }));
 
-    env.define(
-        "obj_remove".into(),
-        new_compiled_function("obj_remove", vec![], vec![], None, |args| {
-            if args.len() != 2 {
-                return Err(RuntimeError::system_error("obj_remove expects 2 arguments", ErrorCode::ArgumentCountMismatch));
-            }
-            if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
-                let removed = obj_ref
-                    .borrow_mut()
-                    .remove(key.as_ref())
-                    .unwrap_or(Value::Null);
-                Ok(removed)
-            } else {
-                Err(RuntimeError::system_error("obj_remove expects (object, string)", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("obj_remove".into(), new_builtin("obj_remove", |args| {
+        arity("obj_remove", args, 2)?;
+        if let (Value::Object(obj_ref), Value::String(key)) = (&args[0], &args[1]) {
+            let removed = obj_ref
+                .borrow_mut()
+                .remove(key.as_ref())
+                .unwrap_or(Value::Null);
+            Ok(removed)
+        } else {
+            Err(RuntimeError::system_error("obj_remove expects (object, string)", ErrorCode::TypeMismatch))
+        }
+    }));
 }
 
 // ── Type checking ───────────────────────────────────────────────────────────
@@ -661,102 +556,82 @@ fn register_types(env: &Environment) {
 // ── Conversion ──────────────────────────────────────────────────────────────
 
 fn register_conversion(env: &Environment) {
-    env.define(
-        "to_string".into(),
-        new_compiled_function("to_string", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("to_string expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            Ok(Value::String(Rc::new(args[0].to_display_string())))
-        }, Some(false)),
-    );
+    env.define("to_string".into(), new_builtin("to_string", |args| {
+        arity("to_string", args, 1)?;
+        Ok(Value::String(Rc::new(args[0].to_display_string())))
+    }));
 
-    env.define(
-        "to_int".into(),
-        new_compiled_function("to_int", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("to_int expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            match &args[0] {
-                Value::Int(n) => Ok(Value::Int(*n)),
-                Value::Float(f) => Ok(Value::Int(*f as i64)),
-                Value::String(s) => match s.parse::<i64>() {
-                    Ok(n) => Ok(Value::Int(n)),
-                    Err(_) => Err(RuntimeError::system_error(format!(
-                        "cannot convert '{}' to int",
-                        s
-                    ), ErrorCode::TypeMismatch)),
-                },
-                Value::Bool(b) => Ok(Value::Int(if *b { 1 } else { 0 })),
-                _ => Err(RuntimeError::system_error(format!(
-                    "cannot convert {} to int",
-                    args[0].type_name()
+    env.define("to_int".into(), new_builtin("to_int", |args| {
+        arity("to_int", args, 1)?;
+        match &args[0] {
+            Value::Int(n) => Ok(Value::Int(*n)),
+            Value::Float(f) => Ok(Value::Int(*f as i64)),
+            Value::String(s) => match s.parse::<i64>() {
+                Ok(n) => Ok(Value::Int(n)),
+                Err(_) => Err(RuntimeError::system_error(format!(
+                    "cannot convert '{}' to int",
+                    s
                 ), ErrorCode::TypeMismatch)),
-            }
-        }, Some(false)),
-    );
+            },
+            Value::Bool(b) => Ok(Value::Int(if *b { 1 } else { 0 })),
+            _ => Err(RuntimeError::system_error(format!(
+                "cannot convert {} to int",
+                args[0].type_name()
+            ), ErrorCode::TypeMismatch)),
+        }
+    }));
 
-    env.define(
-        "to_float".into(),
-        new_compiled_function("to_float", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("to_float expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            match &args[0] {
-                Value::Float(f) => Ok(Value::Float(*f)),
-                Value::Int(n) => Ok(Value::Float(*n as f64)),
-                Value::String(s) => match s.parse::<f64>() {
-                    Ok(f) => Ok(Value::Float(f)),
-                    Err(_) => Err(RuntimeError::system_error(format!(
-                        "cannot convert '{}' to float",
-                        s
-                    ), ErrorCode::TypeMismatch)),
-                },
-                _ => Err(RuntimeError::system_error(format!(
-                    "cannot convert {} to float",
-                    args[0].type_name()
+    env.define("to_float".into(), new_builtin("to_float", |args| {
+        arity("to_float", args, 1)?;
+        match &args[0] {
+            Value::Float(f) => Ok(Value::Float(*f)),
+            Value::Int(n) => Ok(Value::Float(*n as f64)),
+            Value::String(s) => match s.parse::<f64>() {
+                Ok(f) => Ok(Value::Float(f)),
+                Err(_) => Err(RuntimeError::system_error(format!(
+                    "cannot convert '{}' to float",
+                    s
                 ), ErrorCode::TypeMismatch)),
-            }
-        }, Some(false)),
-    );
+            },
+            _ => Err(RuntimeError::system_error(format!(
+                "cannot convert {} to float",
+                args[0].type_name()
+            ), ErrorCode::TypeMismatch)),
+        }
+    }));
 
-    env.define(
-        "char".into(),
-        new_compiled_function("char", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("char expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            match &args[0] {
-                Value::String(s) => {
-                    let mut chars = s.chars();
-                    if let Some(c) = chars.next() {
-                        if chars.next().is_none() {
-                            Ok(Value::Char(c))
-                        } else {
-                            Err(RuntimeError::system_error("char expects a single-character string", ErrorCode::TypeMismatch))
-                        }
+    env.define("char".into(), new_builtin("char", |args| {
+        arity("char", args, 1)?;
+        match &args[0] {
+            Value::String(s) => {
+                let mut chars = s.chars();
+                if let Some(c) = chars.next() {
+                    if chars.next().is_none() {
+                        Ok(Value::Char(c))
                     } else {
-                        Err(RuntimeError::system_error("char expects a non-empty string", ErrorCode::TypeMismatch))
+                        Err(RuntimeError::system_error("char expects a single-character string", ErrorCode::TypeMismatch))
                     }
+                } else {
+                    Err(RuntimeError::system_error("char expects a non-empty string", ErrorCode::TypeMismatch))
                 }
-                Value::Int(n) => {
-                    let code = *n as u32;
-                    match char::from_u32(code) {
-                        Some(c) => Ok(Value::Char(c)),
-                        None => Err(RuntimeError::system_error(format!(
-                            "invalid Unicode code point: {}",
-                            n
-                        ), ErrorCode::TypeMismatch)),
-                    }
-                }
-                Value::Char(c) => Ok(Value::Char(*c)),
-                _ => Err(RuntimeError::system_error(format!(
-                    "cannot convert {} to char",
-                    args[0].type_name()
-                ), ErrorCode::TypeMismatch)),
             }
-        }, Some(false)),
-    );
+            Value::Int(n) => {
+                let code = *n as u32;
+                match char::from_u32(code) {
+                    Some(c) => Ok(Value::Char(c)),
+                    None => Err(RuntimeError::system_error(format!(
+                        "invalid Unicode code point: {}",
+                        n
+                    ), ErrorCode::TypeMismatch)),
+                }
+            }
+            Value::Char(c) => Ok(Value::Char(*c)),
+            _ => Err(RuntimeError::system_error(format!(
+                "cannot convert {} to char",
+                args[0].type_name()
+            ), ErrorCode::TypeMismatch)),
+        }
+    }));
 }
 
 // ── Error Handling ──────────────────────────────────────────────────────────
@@ -764,53 +639,38 @@ fn register_conversion(env: &Environment) {
 fn register_errors(env: &Environment) {
     // is_error(value) -> checks if a value is an Error object
     // An error object is any object with a "message" String property.
-    env.define(
-        "is_error".into(),
-        new_compiled_function("is_error", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("is_error expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            let result = if let Value::Object(ref obj_ref) = args[0] {
-                let map = obj_ref.borrow();
-                matches!(map.get("message"), Some(Value::String(_)))
-            } else {
-                false
-            };
-            Ok(Value::Bool(result))
-        }, Some(false)),
-    );
+    env.define("is_error".into(), new_builtin("is_error", |args| {
+        arity("is_error", args, 1)?;
+        let result = if let Value::Object(ref obj_ref) = args[0] {
+            let map = obj_ref.borrow();
+            matches!(map.get("message"), Some(Value::String(_)))
+        } else {
+            false
+        };
+        Ok(Value::Bool(result))
+    }));
 
     // error_message(error) -> extracts the message from an Error object
-    env.define(
-        "error_message".into(),
-        new_compiled_function("error_message", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("error_message expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            if let Value::Object(ref obj_ref) = args[0] {
-                let map = obj_ref.borrow();
-                Ok(map.get("message").cloned().unwrap_or(Value::Null))
-            } else {
-                Err(RuntimeError::system_error("error_message expects an error object", ErrorCode::TypeMismatch))
-            }
-        }, Some(false)),
-    );
+    env.define("error_message".into(), new_builtin("error_message", |args| {
+        arity("error_message", args, 1)?;
+        if let Value::Object(ref obj_ref) = args[0] {
+            let map = obj_ref.borrow();
+            Ok(map.get("message").cloned().unwrap_or(Value::Null))
+        } else {
+            Err(RuntimeError::system_error("error_message expects an error object", ErrorCode::TypeMismatch))
+        }
+    }));
 
     // error_code(error) -> extracts the code from a CodedError object (null if not CodedError)
-    env.define(
-        "error_code".into(),
-        new_compiled_function("error_code", vec![], vec![], None, |args| {
-            if args.len() != 1 {
-                return Err(RuntimeError::system_error("error_code expects 1 argument", ErrorCode::ArgumentCountMismatch));
-            }
-            if let Value::Object(ref obj_ref) = args[0] {
-                let map = obj_ref.borrow();
-                Ok(map.get("code").cloned().unwrap_or(Value::Null))
-            } else {
-                Ok(Value::Null)
-            }
-        }, Some(false)),
-    );
+    env.define("error_code".into(), new_builtin("error_code", |args| {
+        arity("error_code", args, 1)?;
+        if let Value::Object(ref obj_ref) = args[0] {
+            let map = obj_ref.borrow();
+            Ok(map.get("code").cloned().unwrap_or(Value::Null))
+        } else {
+            Ok(Value::Null)
+        }
+    }));
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

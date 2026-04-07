@@ -32,13 +32,9 @@ pub fn parse(input: &str) -> Result<Program, Vec<ParseError>> {
 
     match ast_builder::build_program(pairs) {
         Ok(program) => Ok(program),
-        Err(_) => {
-            // AST builder failed — wrap as incomplete
-            Ok(Program {
-                statements: vec![Statement::Incomplete {
-                    kind: IncompleteKind::Block,
-                }],
-            })
+        Err(e) => {
+            // AST builder failed — propagate the error
+            Err(e)
         }
     }
 }
